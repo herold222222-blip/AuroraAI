@@ -9,8 +9,10 @@
 [functions]
   node_bundler = "esbuild"
   directory = "netlify/functions"
+  # Keep Gemini SDK as external package so Netlify installs it from node_modules
+  external_node_modules = ["@google/genai"]
 
-# Gemini image edits can take a while (paid plans allow up to 26s)
+# Gemini image edits can take a while (paid plans allow up to 26s; free ~10s)
 [functions."image-edit"]
   timeout = 26
 

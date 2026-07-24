@@ -43,7 +43,9 @@ function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
 function getClient() {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
   if (!apiKey) {
-    throw new Error('缺少 GEMINI_API_KEY，请在 .env 中配置');
+    throw new Error(
+      '缺少 GEMINI_API_KEY。请在 Netlify → Site configuration → Environment variables 中添加该变量并重新部署（本地开发则写入项目根目录 .env）。',
+    );
   }
   return new GoogleGenAI({
     apiKey,

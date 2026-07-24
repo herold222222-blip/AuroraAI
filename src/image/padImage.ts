@@ -93,7 +93,7 @@ export async function padToSupportedRatio(dataUrl: string): Promise<PadResult> {
   ctx.drawImage(img, x, y, imgW, imgH);
 
   return {
-    dataUrl: canvas.toDataURL('image/png'),
+    dataUrl: canvas.toDataURL('image/jpeg', 0.88),
     canvasW,
     canvasH,
     originalCrop: { x, y, w: imgW, h: imgH },
