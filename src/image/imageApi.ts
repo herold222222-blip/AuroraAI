@@ -11,8 +11,18 @@ export interface ImageEditPayload {
 const NETLIFY_SAFE_BYTES = 5.5 * 1024 * 1024;
 
 function approxPayloadBytes(payload: ImageEditPayload): number {
-  // Rough UTF-16-ish estimate is enough for a guardrail
   return JSON.stringify(payload).length;
+}
+
+/** On Netlify, call the function URL directly to avoid rewrite dropping POST bodies. */
+function editEndpoint(): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host.endsWith('netlify.app') || host.endsWith('netlify.com')) {
+      return '/.netlify/functions/image-edit';
+    }
+  }
+  return '/api/image/edit';
 }
 
 export async function requestImageEdit(payload: ImageEditPayload): Promise<{
@@ -28,7 +38,7 @@ export async function requestImageEdit(payload: ImageEditPayload): Promise<{
 
   let res: Response;
   try {
-    res = await fetch('/api/image/edit', {
+    res = await fetch(editEndpoint(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -60,11 +70,16 @@ export async function requestImageEdit(payload: ImageEditPayload): Promise<{
     if (res.status === 413) {
       throw new Error('请求体过大，请缩小图片后再试。');
     }
+    if (res.status === 400) {
+      throw new Error(
+        '请求无效 (400)。多半是云函数未收到图片数据，或 GEMINI_API_KEY 无效。请确认环境变量已配置，并强制重新部署后再试。',
+      );
+    }
     const snippet = raw.replace(/\s+/g, ' ').slice(0, 120);
     throw new Error(
       snippet
         ? `请求失败 (${res.status}): ${snippet}`
-        : `请求失败 (${res.status})。请到 Netlify → Site configuration → Environment variables 确认已设置 GEMINI_API_KEY，并查看 Functions 日志。`,
+        : `请求失败 (${res.status})。请到 Netlify → Environment variables 确认 GEMINI_API_KEY，并查看 Functions 日志。`,
     );
   }
 

@@ -11,7 +11,7 @@ import {
 import { resizeImage, resizeToMaxSide } from '../../image/padImage';
 
 const TABS = [
-  { id: 'retouch', label: '局部修图' },
+  { id: 'retouch', label: '改图/修图' },
   { id: 'crop', label: '裁剪' },
   { id: 'adjust', label: '调整尺寸' },
   { id: 'filter', label: '艺术滤镜' },
