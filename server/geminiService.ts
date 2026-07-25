@@ -71,8 +71,9 @@ function buildPrompt(req: EditRequest): string {
         '- Black/dark mask pixels must stay pixel-identical to IMAGE 1 (same RGB).',
         '- Do not spill edits across mask edges; do not alter unmasked objects, sky, ground, or lighting globally.',
         '- Keep full-frame size identical to IMAGE 1.',
+        '- This may be one step in a sequence of local edits; do not drift geometry or restyle outside the mask.',
         req.hotspot
-          ? `- The click focus is near pixel (${Math.round(req.hotspot.x)}, ${Math.round(req.hotspot.y)}); prefer editing the connected object/material under that point within the white mask.`
+          ? `- Focus near pixel (${Math.round(req.hotspot.x)}, ${Math.round(req.hotspot.y)}) (mask centroid); prefer the material under that point within the white mask.`
           : '',
       ]
         .filter(Boolean)
@@ -83,22 +84,35 @@ function buildPrompt(req: EditRequest): string {
       [
         'LOCAL OBJECT EDIT (hotspot / click-to-select):',
         `Focus pixel: (${Math.round(req.hotspot.x)}, ${Math.round(req.hotspot.y)}).`,
-        '1) Mentally segment the single connected object or material patch under that pixel',
+        req.maskDataUrl
+          ? 'IMAGE 1 = original photo; IMAGE 2 = soft ROI mask (white/bright = preferred edit zone).'
+          : '',
+        '1) Identify the single connected object or material patch under the focus pixel',
         '   (furniture, door, window, plant, railing, facade panel, pavement, textile, etc.).',
         '2) Apply the user instruction ONLY to that object / material.',
-        '3) Every other pixel must stay visually identical (same RGB appearance, lighting, geometry).',
-        '4) Do not regrade the whole image, change the sky, or restyle neighboring elements.',
-        '5) Match existing light direction and contact shadows on the edited object.',
-        '6) Keep full-frame size identical to the input.',
-      ].join('\n'),
+        req.maskDataUrl
+          ? '3) Prefer staying inside the white/bright ROI; never invent changes far outside it.'
+          : '3) Do not expand the edit beyond that object.',
+        '4) Every other pixel must stay visually identical (same RGB appearance, lighting, geometry).',
+        '5) Do not regrade the whole image, change the sky, or restyle neighboring elements.',
+        '6) Match existing light direction and contact shadows on the edited object.',
+        '7) Keep full-frame size identical to the input.',
+      ]
+        .filter(Boolean)
+        .join('\n'),
     );
   }
 
   parts.push(`USER INSTRUCTION:\n${req.prompt}`);
 
   if (req.materialRefs?.length) {
+    const labels = req.materialRefs
+      .map((_, i) => `图${i + 1}`)
+      .join('、');
     parts.push(
-      `${req.materialRefs.length} reference image(s) follow AFTER the mask (if any). Use them ONLY as appearance references for the allowed edit region — never restyle the whole image.`,
+      `${req.materialRefs.length} reference image(s) follow AFTER the mask (if any), labeled ${labels} in order.`,
+      'When the user mentions 图1/图2/…, use the matching reference.',
+      'Use them ONLY as appearance references for the allowed edit region — never restyle the whole image.',
     );
   }
 
@@ -120,7 +134,10 @@ export async function editImage(req: EditRequest): Promise<{
     inlineData?: { mimeType: string; data: string };
   }> = [{ text: buildPrompt(req) }, { inlineData: { mimeType, data: base64 } }];
 
-  if (req.mode === 'mask' && req.maskDataUrl) {
+  if (
+    (req.mode === 'mask' || req.mode === 'hotspot') &&
+    req.maskDataUrl
+  ) {
     const mask = parseDataUrl(req.maskDataUrl);
     contents.push({
       inlineData: { mimeType: mask.mimeType, data: mask.base64 },

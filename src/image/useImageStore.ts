@@ -156,7 +156,8 @@ interface ImageState {
   redo: () => void;
   resetToOriginal: () => void;
 
-  addMaterial: (url: string) => Promise<void>;
+  addMaterial: (url: string) => Promise<boolean>;
+  removeMaterial: (id: string) => void;
   toggleMaterial: (id: string) => void;
   clearMaterials: () => void;
   selectedMaterialUrls: () => string[];
@@ -212,7 +213,12 @@ export const useImageStore = create<ImageState>((set, get) => ({
         ? { cropSelection: undefined, showCompare: false }
         : {}),
     }),
-  setRetouchTool: (t) => set({ retouchTool: t }),
+  setRetouchTool: (t) =>
+    set({
+      retouchTool: t,
+      // Leave compare so point/brush can hit the live image immediately.
+      ...(t === 'point' || t === 'brush' ? { showCompare: false } : {}),
+    }),
   setBrushSize: (n) => set({ brushSize: n }),
 
   placeHotspot: (x, y, opts) => {
@@ -365,12 +371,14 @@ export const useImageStore = create<ImageState>((set, get) => ({
     const cur = get().currentUrl;
     const past = cur ? [...get().past, { url: cur }] : get().past;
     const skipCompare = Boolean(opts?.skipCompare);
+    const before = opts?.compareFrom ?? cur;
     set({
       currentUrl: url,
       past: past.slice(-40),
       future: [],
-      compareBeforeUrl: skipCompare ? null : (opts?.compareFrom ?? cur),
-      showCompare: skipCompare ? false : Boolean(opts?.compareFrom ?? cur),
+      // Keep before-url for footer「前后对比」even when we don't auto-open compare.
+      compareBeforeUrl: before ?? null,
+      showCompare: skipCompare ? false : Boolean(before),
       hotspots: [],
       brushRegions: [],
       hasMask: false,
@@ -387,6 +395,9 @@ export const useImageStore = create<ImageState>((set, get) => ({
       future: [{ url: currentUrl }, ...future],
       currentUrl: prev.url,
       showCompare: false,
+      hotspots: [],
+      brushRegions: [],
+      hasMask: false,
       cropSelection: undefined,
     });
   },
@@ -400,6 +411,9 @@ export const useImageStore = create<ImageState>((set, get) => ({
       past: [...past, { url: currentUrl }],
       currentUrl: next.url,
       showCompare: false,
+      hotspots: [],
+      brushRegions: [],
+      hasMask: false,
       cropSelection: undefined,
     });
   },
@@ -420,6 +434,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
   },
 
   addMaterial: async (url) => {
+    if (get().materials.length >= 5) return false;
     const compressed = await compressDataUrl(url, 768, 0.7);
     set({
       materials: [
@@ -427,7 +442,11 @@ export const useImageStore = create<ImageState>((set, get) => ({
         { id: uid('mat'), url: compressed, selected: true },
       ],
     });
+    return true;
   },
+
+  removeMaterial: (id) =>
+    set({ materials: get().materials.filter((m) => m.id !== id) }),
 
   toggleMaterial: (id) =>
     set({

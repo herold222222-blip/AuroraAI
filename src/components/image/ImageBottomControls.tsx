@@ -9,6 +9,11 @@ import {
   runMultiHotspotEdits,
 } from '../../image/runAiEdit';
 import { resizeImage, resizeToMaxSide } from '../../image/padImage';
+import {
+  PromptRefPlus,
+  PromptRefThumbs,
+  PromptRefZone,
+} from './PromptRefAttach';
 
 const TABS = [
   { id: 'retouch', label: '改图/修图' },
@@ -65,7 +70,15 @@ export function ImageBottomControls() {
     setBusy(true);
     try {
       const out = await runAiEdit({ prompt: p.trim(), systemHint, forceGlobal });
-      commitImage(out, { compareFrom: currentUrl });
+      const localEdit =
+        !forceGlobal &&
+        (useImageStore.getState().hotspots.length > 0 ||
+          useImageStore.getState().brushRegions.length > 0 ||
+          useImageStore.getState().hasMask);
+      commitImage(out, {
+        compareFrom: currentUrl,
+        skipCompare: localEdit,
+      });
       pushToast('生成完成', 'success');
     } catch (err) {
       pushToast(err instanceof Error ? err.message : String(err), 'error');
@@ -79,7 +92,8 @@ export function ImageBottomControls() {
     setBusy(true);
     try {
       const out = await runMultiHotspotEdits();
-      commitImage(out, { compareFrom: currentUrl });
+      // Don't auto-open compare — keep the live canvas so continuous point edits stay precise.
+      commitImage(out, { compareFrom: currentUrl, skipCompare: true });
       pushToast(
         `已同步修改 ${hotspots.filter((h) => h.prompt.trim()).length} 处`,
         'success',
@@ -96,7 +110,7 @@ export function ImageBottomControls() {
     setBusy(true);
     try {
       const out = await runMultiBrushEdits();
-      commitImage(out, { compareFrom: currentUrl });
+      commitImage(out, { compareFrom: currentUrl, skipCompare: true });
       pushToast(
         `已同步修改 ${brushRegions.filter((r) => r.prompt.trim()).length} 处涂抹区域`,
         'success',
@@ -110,10 +124,10 @@ export function ImageBottomControls() {
 
   const retouchHint =
     brushRegions.length > 0
-      ? '每个独立涂抹区域会编号；橡皮擦可逐个撤销；按住 Shift+左键点击某区域可删除。下方为各区域对应修改要求，点「应用」同步修改。'
+      ? '每个独立涂抹区域会编号；橡皮擦可逐个撤销；按住 Shift+左键点击某区域可删除。下方为各区域对应修改要求，点「应用」同步修改。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。'
       : hotspots.length > 0
-        ? '按住 Shift 可添加多个选点；再次点击某点可删除；橡皮擦逐个撤销上一点。点选会识别该位置的物体/材质，下方填写对应修改要求后点「应用」。'
-        : '可以直接输入需求进行全局修改，或点击/涂抹图像进行局部编辑。Shift+点击可多选点；涂抹时不相连区域会自动编号。';
+        ? '按住 Shift 可添加多个选点；再次点击某点可删除；橡皮擦逐个撤销上一点。点选会识别该位置的物体/材质，下方填写对应修改要求后点「应用」。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。'
+        : '可以直接输入需求进行全局修改，或点击/涂抹图像进行局部编辑。Shift+点击可多选点；涂抹时不相连区域会自动编号。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。';
 
   return (
     <div className="img-controls">
@@ -136,7 +150,7 @@ export function ImageBottomControls() {
             <p className="img-tab-hint">{retouchHint}</p>
 
             {brushRegions.length > 0 ? (
-              <div className="img-hotspot-prompts">
+              <PromptRefZone className="img-hotspot-prompts" disabled={busy}>
                 {brushRegions.map((br) => (
                   <div key={br.id} className="img-hotspot-prompt-row">
                     <span
@@ -151,9 +165,10 @@ export function ImageBottomControls() {
                       onChange={(e) =>
                         setBrushRegionPrompt(br.id, e.target.value)
                       }
-                      placeholder={`涂抹区域 ${br.n} 的修改要求…`}
+                      placeholder={`涂抹区域 ${br.n} 的修改要求…（可粘贴/拖入参考图）`}
                       disabled={busy}
                     />
+                    <PromptRefPlus disabled={busy} />
                     <button
                       type="button"
                       className="btn ghost sm"
@@ -165,6 +180,7 @@ export function ImageBottomControls() {
                     </button>
                   </div>
                 ))}
+                <PromptRefThumbs disabled={busy} />
                 <button
                   type="button"
                   className="img-gen-btn"
@@ -173,9 +189,9 @@ export function ImageBottomControls() {
                 >
                   {busy ? '应用中…' : '应用'}
                 </button>
-              </div>
+              </PromptRefZone>
             ) : hotspots.length > 0 ? (
-              <div className="img-hotspot-prompts">
+              <PromptRefZone className="img-hotspot-prompts" disabled={busy}>
                 {hotspots.map((hp) => (
                   <div key={hp.id} className="img-hotspot-prompt-row">
                     <span className="img-hotspot-prompt-num" title={`选点 ${hp.n}`}>
@@ -185,9 +201,10 @@ export function ImageBottomControls() {
                       className="img-prompt-input"
                       value={hp.prompt}
                       onChange={(e) => setHotspotPrompt(hp.id, e.target.value)}
-                      placeholder={`选点 ${hp.n} 的修改要求…`}
+                      placeholder={`选点 ${hp.n} 的修改要求…（可粘贴/拖入参考图）`}
                       disabled={busy}
                     />
+                    <PromptRefPlus disabled={busy} />
                     <button
                       type="button"
                       className="btn ghost sm"
@@ -199,6 +216,7 @@ export function ImageBottomControls() {
                     </button>
                   </div>
                 ))}
+                <PromptRefThumbs disabled={busy} />
                 <button
                   type="button"
                   className="img-gen-btn"
@@ -207,28 +225,32 @@ export function ImageBottomControls() {
                 >
                   {busy ? '应用中…' : '应用'}
                 </button>
-              </div>
+              </PromptRefZone>
             ) : (
-              <div className="img-prompt-row">
-                <input
-                  className="img-prompt-input"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  placeholder={placeholder}
-                  disabled={busy}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') void run(prompt);
-                  }}
-                />
-                <button
-                  type="button"
-                  className="img-gen-btn"
-                  disabled={busy}
-                  onClick={() => void run(prompt)}
-                >
-                  {busy ? '生成中…' : '生成'}
-                </button>
-              </div>
+              <PromptRefZone className="img-prompt-stack" disabled={busy}>
+                <div className="img-prompt-row">
+                  <input
+                    className="img-prompt-input"
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    placeholder={placeholder}
+                    disabled={busy}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void run(prompt);
+                    }}
+                  />
+                  <PromptRefPlus disabled={busy} />
+                  <button
+                    type="button"
+                    className="img-gen-btn"
+                    disabled={busy}
+                    onClick={() => void run(prompt)}
+                  >
+                    {busy ? '生成中…' : '生成'}
+                  </button>
+                </div>
+                <PromptRefThumbs disabled={busy} />
+              </PromptRefZone>
             )}
           </div>
         )}
@@ -300,29 +322,33 @@ export function ImageBottomControls() {
                 缩小一倍
               </button>
             </div>
-            <div className="img-prompt-row">
-              <input
-                className="img-prompt-input"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="自定义尺寸/构图调整描述…"
-                disabled={busy}
-              />
-              <button
-                type="button"
-                className="img-gen-btn"
-                disabled={busy}
-                onClick={() =>
-                  run(
-                    prompt,
-                    'Adjust framing/scale as requested while keeping subject integrity.',
-                    true,
-                  )
-                }
-              >
-                应用调整
-              </button>
-            </div>
+            <PromptRefZone className="img-prompt-stack" disabled={busy}>
+              <div className="img-prompt-row">
+                <input
+                  className="img-prompt-input"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="自定义尺寸/构图调整描述…（可粘贴/拖入参考图）"
+                  disabled={busy}
+                />
+                <PromptRefPlus disabled={busy} />
+                <button
+                  type="button"
+                  className="img-gen-btn"
+                  disabled={busy}
+                  onClick={() =>
+                    run(
+                      prompt,
+                      'Adjust framing/scale as requested while keeping subject integrity.',
+                      true,
+                    )
+                  }
+                >
+                  应用调整
+                </button>
+              </div>
+              <PromptRefThumbs disabled={busy} />
+            </PromptRefZone>
           </div>
         )}
 
@@ -372,23 +398,27 @@ export function ImageBottomControls() {
                 ))}
               </div>
             </div>
-            <div className="img-prompt-row">
-              <input
-                className="img-prompt-input"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder="自定义滤镜描述…"
-                disabled={busy}
-              />
-              <button
-                type="button"
-                className="img-gen-btn"
-                disabled={busy}
-                onClick={() => run(prompt, undefined, true)}
-              >
-                应用滤镜
-              </button>
-            </div>
+            <PromptRefZone className="img-prompt-stack" disabled={busy}>
+              <div className="img-prompt-row">
+                <input
+                  className="img-prompt-input"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="自定义滤镜描述…（可粘贴/拖入参考图）"
+                  disabled={busy}
+                />
+                <PromptRefPlus disabled={busy} />
+                <button
+                  type="button"
+                  className="img-gen-btn"
+                  disabled={busy}
+                  onClick={() => run(prompt, undefined, true)}
+                >
+                  应用滤镜
+                </button>
+              </div>
+              <PromptRefThumbs disabled={busy} />
+            </PromptRefZone>
           </div>
         )}
 

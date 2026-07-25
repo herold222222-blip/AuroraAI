@@ -204,6 +204,11 @@ export function paintRegionsOnCanvas(
   }
 }
 
+/**
+ * Scale a binary mask. When upsizing (display → natural), stamp each source
+ * pixel into its destination rectangle so thin brush strokes keep coverage
+ * instead of disappearing between nearest-neighbor samples.
+ */
 export function scaleMask(
   mask: Uint8Array,
   srcW: number,
@@ -213,11 +218,40 @@ export function scaleMask(
 ): Uint8Array {
   if (srcW === dstW && srcH === dstH) return mask;
   const out = new Uint8Array(dstW * dstH);
+  if (dstW >= srcW || dstH >= srcH) {
+    for (let y = 0; y < srcH; y++) {
+      const y0 = Math.floor((y * dstH) / srcH);
+      const y1 = Math.max(y0 + 1, Math.floor(((y + 1) * dstH) / srcH));
+      for (let x = 0; x < srcW; x++) {
+        if (!mask[y * srcW + x]) continue;
+        const x0 = Math.floor((x * dstW) / srcW);
+        const x1 = Math.max(x0 + 1, Math.floor(((x + 1) * dstW) / srcW));
+        for (let dy = y0; dy < y1 && dy < dstH; dy++) {
+          for (let dx = x0; dx < x1 && dx < dstW; dx++) {
+            out[dy * dstW + dx] = 1;
+          }
+        }
+      }
+    }
+    return out;
+  }
+  // Downscale: any-source in the bin keeps the pixel (don't erode strokes).
   for (let y = 0; y < dstH; y++) {
-    const sy = Math.min(srcH - 1, Math.floor((y * srcH) / dstH));
+    const sy0 = Math.floor((y * srcH) / dstH);
+    const sy1 = Math.max(sy0 + 1, Math.floor(((y + 1) * srcH) / dstH));
     for (let x = 0; x < dstW; x++) {
-      const sx = Math.min(srcW - 1, Math.floor((x * srcW) / dstW));
-      out[y * dstW + x] = mask[sy * srcW + sx];
+      const sx0 = Math.floor((x * srcW) / dstW);
+      const sx1 = Math.max(sx0 + 1, Math.floor(((x + 1) * srcW) / dstW));
+      let lit = 0;
+      for (let sy = sy0; sy < sy1 && sy < srcH && !lit; sy++) {
+        for (let sx = sx0; sx < sx1 && sx < srcW; sx++) {
+          if (mask[sy * srcW + sx]) {
+            lit = 1;
+            break;
+          }
+        }
+      }
+      out[y * dstW + x] = lit;
     }
   }
   return out;

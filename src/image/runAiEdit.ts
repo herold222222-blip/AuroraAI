@@ -5,6 +5,10 @@ import {
 import { requestImageEdit, type ImageEditPayload } from './imageApi';
 import { useImageStore } from './useImageStore';
 import {
+  dataUrlToBinaryMask,
+  maskCentroid,
+} from './brushRegions';
+import {
   compositeHotspotLocal,
   compositeLocalStrict,
   hotspotRoiAlpha,
@@ -16,7 +20,8 @@ const LOCAL_SYSTEM = `CRITICAL LOCAL EDIT CONSTRAINTS (must obey strictly):
 2. Every pixel outside that region must remain visually identical to the input image (same color, texture, lighting, geometry).
 3. Do not restyle, recolor, relight, or remodel anything outside the allowed region.
 4. Do not change camera, crop, or aspect. Output the full frame at the same size as the input.
-5. Prefer seamless blending only at the boundary of the allowed region.`;
+5. Prefer seamless blending only at the boundary of the allowed region.
+6. This may be one step in a sequence of brush/mask edits — never drift prior edits or global look.`;
 
 const HOTSPOT_SYSTEM = `CRITICAL HOTSPOT OBJECT EDIT (must obey strictly):
 1. Identify the single real-world object / material / component under the click point
@@ -78,13 +83,15 @@ export async function runAiEdit(opts: {
     mode = 'mask';
     local = true;
   } else if (!opts.forceGlobal && activeHotspot) {
-    // Semantic hotspot edit: let the model pick the object; soft ROI only for composite.
+    // Hotspot: send ROI mask + focus point so iterative edits stay locked to the click.
+    // Soft alpha is still used client-side for seamless composite.
     hotspotRoi = await hotspotRoiAlpha(
       current,
       activeHotspot.x,
       activeHotspot.y,
     );
     naturalMaskUrl = hotspotRoi.maskDataUrl;
+    maskDataUrl = await padMaskToCanvas(naturalMaskUrl, pad);
     hotspot = pad.mapPoint(activeHotspot.x, activeHotspot.y);
     mode = 'hotspot';
     local = true;
@@ -95,6 +102,17 @@ export async function runAiEdit(opts: {
   }
   if (local && mode === 'hotspot' && !hotspot) {
     throw new Error('点选编辑需要有效的选点坐标');
+  }
+
+  // Brush/mask: send region centroid as focus so Gemini stays locked across iterative edits.
+  if (local && mode === 'mask' && naturalMaskUrl && !hotspot) {
+    try {
+      const { mask, w, h } = await dataUrlToBinaryMask(naturalMaskUrl);
+      const c = maskCentroid(mask, w, h);
+      hotspot = pad.mapPoint(c.x, c.y);
+    } catch {
+      /* optional focus hint */
+    }
   }
 
   const isHotspot = mode === 'hotspot';
@@ -116,7 +134,7 @@ export async function runAiEdit(opts: {
     prompt: userPrompt,
     systemHint,
     mode,
-    hotspot: local && activeHotspot ? hotspot : undefined,
+    hotspot: local ? hotspot : undefined,
     maskDataUrl,
     materialRefs: refs.length ? refs : undefined,
   });

@@ -10,7 +10,9 @@ const STAGE =
 function isFree(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true;
   // Portaled modals (login/help) live outside data-auth-free wrappers
-  return Boolean(target.closest('[data-auth-free], .modal-mask'));
+  return Boolean(
+    target.closest('[data-auth-free], .modal-mask, .img-ref-lightbox'),
+  );
 }
 
 /**

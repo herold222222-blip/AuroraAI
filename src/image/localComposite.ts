@@ -357,7 +357,7 @@ export async function compositeLocalStrict(
   originalUrl: string,
   editedUrl: string,
   maskUrl: string,
-  feather = 3,
+  feather?: number,
 ): Promise<string> {
   const [orig, edited, maskImg] = await Promise.all([
     loadImageEl(originalUrl),
@@ -392,7 +392,10 @@ export async function compositeLocalStrict(
   for (let p = 0, i = 0; p < w * h; p++, i += 4) {
     alpha[p] = (md.data[i] + md.data[i + 1] + md.data[i + 2]) / (3 * 255);
   }
-  const soft = feather > 0 ? featherAlpha(alpha, w, h, feather) : alpha;
+  // Adaptive feather so iterative brush edits blend cleanly at mask edges.
+  const featherPx =
+    feather ?? Math.max(3, Math.round(Math.min(w, h) * 0.005));
+  const soft = featherPx > 0 ? featherAlpha(alpha, w, h, featherPx) : alpha;
 
   const out = base.data;
   const e = ed.data;

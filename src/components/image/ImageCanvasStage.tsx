@@ -56,6 +56,7 @@ export function ImageCanvasStage() {
   const setBrushRegions = useImageStore((s) => s.setBrushRegions);
   const setHasMask = useImageStore((s) => s.setHasMask);
   const setRetouchTool = useImageStore((s) => s.setRetouchTool);
+  const setShowCompare = useImageStore((s) => s.setShowCompare);
   const cropAspect = useImageStore((s) => s.cropAspect);
   const cropSelection = useImageStore((s) => s.cropSelection);
   const setCropSelection = useImageStore((s) => s.setCropSelection);
@@ -70,10 +71,32 @@ export function ImageCanvasStage() {
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [viewScale, setViewScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  /** Natural size after decode — gates point/brush so coords never use naturalWidth=0. */
+  const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(
+    null,
+  );
   const painting = useRef(false);
   const strokeDirty = useRef(false);
   const panning = useRef(false);
   const panLast = useRef({ x: 0, y: 0 });
+
+  const markImageReady = useCallback((img: HTMLImageElement | null) => {
+    if (!img || !img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+      setImageSize(null);
+      return;
+    }
+    setImageSize({ w: img.naturalWidth, h: img.naturalHeight });
+  }, []);
+
+  useEffect(() => {
+    setImageSize(null);
+    painting.current = false;
+    strokeDirty.current = false;
+    const stroke = strokeRef.current;
+    if (stroke) {
+      stroke.getContext('2d')!.clearRect(0, 0, stroke.width, stroke.height);
+    }
+  }, [currentUrl]);
 
   const resetView = useCallback(() => {
     setViewScale(1);
@@ -245,14 +268,19 @@ export function ImageCanvasStage() {
   }, [cropAspect, tab, currentUrl, setCropSelection]);
 
   const toImageCoords = (e: MouseEvent) => {
-    const img = imgRef.current!;
+    const img = imgRef.current;
+    if (!img || !img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
+      return null;
+    }
     const rect = img.getBoundingClientRect();
     // Visual rect accounts for CSS zoom/pan; map back to layout/canvas space
     const nx = (e.clientX - rect.left) / Math.max(1, rect.width);
     const ny = (e.clientY - rect.top) / Math.max(1, rect.height);
+    const natW = img.naturalWidth;
+    const natH = img.naturalHeight;
     return {
-      x: nx * img.naturalWidth,
-      y: ny * img.naturalHeight,
+      x: Math.min(natW - 1e-3, Math.max(0, nx * natW)),
+      y: Math.min(natH - 1e-3, Math.max(0, ny * natH)),
       lx: nx * img.clientWidth,
       ly: ny * img.clientHeight,
     };
@@ -260,7 +288,9 @@ export function ImageCanvasStage() {
 
   const paintStrokeAt = (lx: number, ly: number) => {
     const stroke = strokeRef.current;
-    if (!stroke) return;
+    const img = imgRef.current;
+    // Wait until the current (possibly post-edit) image has real natural size.
+    if (!stroke || !img || !img.complete || img.naturalWidth <= 0) return;
     syncCanvasSize(stroke);
     const ctx = stroke.getContext('2d')!;
     ctx.fillStyle = 'rgba(239, 68, 68, 0.6)';
@@ -274,7 +304,13 @@ export function ImageCanvasStage() {
   const finalizeStroke = useCallback(async () => {
     const stroke = strokeRef.current;
     const img = imgRef.current;
-    if (!stroke || !img || !strokeDirty.current) {
+    if (
+      !stroke ||
+      !img ||
+      !strokeDirty.current ||
+      img.naturalWidth <= 0 ||
+      img.naturalHeight <= 0
+    ) {
       strokeDirty.current = false;
       return;
     }
@@ -310,7 +346,9 @@ export function ImageCanvasStage() {
 
   const onPointClick = (e: MouseEvent) => {
     if (tab !== 'retouch' || retouchTool !== 'point') return;
+    if (showCompare) setShowCompare(false);
     const p = toImageCoords(e);
+    if (!p) return;
     const img = imgRef.current;
     const hitRadius = img
       ? Math.max(18, Math.min(img.naturalWidth, img.naturalHeight) * 0.025)
@@ -333,10 +371,13 @@ export function ImageCanvasStage() {
   const onBrushMouseDown = (e: MouseEvent) => {
     if (tab !== 'retouch' || retouchTool !== 'brush') return;
     e.preventDefault();
+    if (showCompare) setShowCompare(false);
+    if (!imageSize) return;
     const p = toImageCoords(e);
+    if (!p) return;
     if (e.shiftKey) {
       const img = imgRef.current;
-      if (!img) return;
+      if (!img || img.naturalWidth <= 0) return;
       void (async () => {
         const hit = await findBrushRegionAt(
           useImageStore.getState().brushRegions,
@@ -355,17 +396,23 @@ export function ImageCanvasStage() {
 
   const mainImage = (
     <img
+      key={currentUrl}
       ref={imgRef}
       src={currentUrl}
       alt="edit"
       className="img-main"
       crossOrigin="anonymous"
       draggable={false}
+      onLoad={(e) => {
+        markImageReady(e.currentTarget);
+        void refreshOverlay();
+      }}
       onClick={tab === 'retouch' && retouchTool === 'point' ? onPointClick : undefined}
       onMouseDown={onBrushMouseDown}
       onMouseMove={(e) => {
         if (tab === 'retouch' && retouchTool === 'brush') {
           const p = toImageCoords(e);
+          if (!p) return;
           setCursor({ x: p.lx, y: p.ly });
           if (painting.current) {
             paintStrokeAt(p.lx, p.ly);
@@ -495,35 +542,33 @@ export function ImageCanvasStage() {
                   opacity: tab === 'retouch' ? 1 : 0,
                 }}
               />
-              {hotspots.map((hp) =>
-                imgRef.current ? (
+              {imageSize &&
+                hotspots.map((hp) => (
                   <span
                     key={hp.id}
                     className="img-hotspot"
                     style={{
-                      left: `${(hp.x / imgRef.current.naturalWidth) * 100}%`,
-                      top: `${(hp.y / imgRef.current.naturalHeight) * 100}%`,
+                      left: `${(hp.x / imageSize.w) * 100}%`,
+                      top: `${(hp.y / imageSize.h) * 100}%`,
                     }}
                   >
                     <span className="img-hotspot-ping" />
                     <span className="img-hotspot-core">{hp.n}</span>
                   </span>
-                ) : null,
-              )}
-              {brushRegions.map((br) =>
-                imgRef.current ? (
+                ))}
+              {imageSize &&
+                brushRegions.map((br) => (
                   <span
                     key={br.id}
                     className="img-hotspot img-brush-region-num"
                     style={{
-                      left: `${(br.cx / imgRef.current.naturalWidth) * 100}%`,
-                      top: `${(br.cy / imgRef.current.naturalHeight) * 100}%`,
+                      left: `${(br.cx / imageSize.w) * 100}%`,
+                      top: `${(br.cy / imageSize.h) * 100}%`,
                     }}
                   >
                     <span className="img-hotspot-core">{br.n}</span>
                   </span>
-                ) : null,
-              )}
+                ))}
               {cursor && retouchTool === 'brush' && tab === 'retouch' && (
                 <span
                   className="img-brush-cursor"

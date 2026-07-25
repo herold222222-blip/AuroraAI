@@ -98,9 +98,10 @@ export async function padToSupportedRatio(dataUrl: string): Promise<PadResult> {
     canvasH,
     originalCrop: { x, y, w: imgW, h: imgH },
     ratioName: ratio.name,
+    // Use drawn size (not float scale) so rounding matches the pixels Gemini sees.
     mapPoint: (px, py) => ({
-      x: x + px * scale,
-      y: y + py * scale,
+      x: x + (px / Math.max(1, width)) * imgW,
+      y: y + (py / Math.max(1, height)) * imgH,
     }),
   };
 }
@@ -145,7 +146,11 @@ export async function cropFromPad(
   return canvas.toDataURL('image/png');
 }
 
-/** Crop using known pad canvas size so mismatched AI output still maps correctly */
+/**
+ * Crop using known pad canvas size so mismatched AI output still maps correctly.
+ * Uses uniform cover scaling (no anisotropic stretch) so click/focus coords stay
+ * aligned across iterative edits when Gemini returns a different aspect ratio.
+ */
 export async function cropFromPadSized(
   resultDataUrl: string,
   crop: OriginalCrop,
@@ -155,18 +160,27 @@ export async function cropFromPadSized(
   outH: number,
 ): Promise<string> {
   const img = await loadHtmlImage(resultDataUrl);
-  const scaleX = img.naturalWidth / padW;
-  const scaleY = img.naturalHeight / padH;
+  const rw = img.naturalWidth;
+  const rh = img.naturalHeight;
+  // Cover: fit pad frame into result, center-crop overflow — keeps geometry stable.
+  const scale = Math.max(rw / Math.max(1, padW), rh / Math.max(1, padH));
+  const mappedW = padW * scale;
+  const mappedH = padH * scale;
+  const ox = (rw - mappedW) / 2;
+  const oy = (rh - mappedH) / 2;
+
   const canvas = document.createElement('canvas');
   canvas.width = outW;
   canvas.height = outH;
   const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(
     img,
-    crop.x * scaleX,
-    crop.y * scaleY,
-    crop.w * scaleX,
-    crop.h * scaleY,
+    ox + crop.x * scale,
+    oy + crop.y * scale,
+    crop.w * scale,
+    crop.h * scale,
     0,
     0,
     outW,

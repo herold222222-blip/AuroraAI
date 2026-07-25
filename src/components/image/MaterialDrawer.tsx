@@ -1,5 +1,6 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { useImageStore } from '../../image/useImageStore';
+import { RefImageLightbox } from './PromptRefAttach';
 
 export function MaterialDrawer() {
   const open = useImageStore((s) => s.materialDrawerOpen);
@@ -9,6 +10,9 @@ export function MaterialDrawer() {
   const toggleMaterial = useImageStore((s) => s.toggleMaterial);
   const clearMaterials = useImageStore((s) => s.clearMaterials);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [preview, setPreview] = useState<{ url: string; label: string } | null>(
+    null,
+  );
 
   return (
     <div className={`img-mat-drawer${open ? ' open' : ''}`}>
@@ -39,7 +43,8 @@ export function MaterialDrawer() {
               const files = Array.from(e.target.files || []);
               for (const f of files) {
                 const url = await readFile(f);
-                await addMaterial(url);
+                const ok = await addMaterial(url);
+                if (!ok) break;
               }
               e.target.value = '';
             }}
@@ -47,25 +52,38 @@ export function MaterialDrawer() {
           <button
             type="button"
             className="btn ghost block sm"
+            disabled={materials.length >= 5}
             onClick={() => fileRef.current?.click()}
           >
-            上传参考图
+            上传参考图（{materials.length}/5）
           </button>
           <div className="img-mat-grid">
-            {materials.map((m) => (
+            {materials.map((m, i) => (
               <button
                 key={m.id}
                 type="button"
                 className={`img-mat-item${m.selected ? ' selected' : ''}`}
                 onClick={() => toggleMaterial(m.id)}
+                onDoubleClick={() =>
+                  setPreview({ url: m.url, label: `图${i + 1}` })
+                }
+                title={`图${i + 1}（单击选用，双击查看大图）`}
               >
-                <img src={m.url} alt="" />
+                <img src={m.url} alt={`图${i + 1}`} />
+                <span className="img-mat-num">图{i + 1}</span>
                 {m.selected && <span className="img-mat-check">✓</span>}
               </button>
             ))}
           </div>
-          <p className="img-mat-hint">勾选的素材将作为 Gemini 参考输入。</p>
+          <p className="img-mat-hint">勾选的素材将作为参考输入（最多 5 张，图1–图5）。</p>
         </div>
+      )}
+      {preview && (
+        <RefImageLightbox
+          url={preview.url}
+          label={preview.label}
+          onClose={() => setPreview(null)}
+        />
       )}
     </div>
   );

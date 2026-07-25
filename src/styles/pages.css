@@ -1662,6 +1662,9 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  position: relative;
+  border-radius: 12px;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
 }
 .img-hotspot-prompt-row {
   display: flex;
@@ -1859,6 +1862,18 @@
 .img-mat-item.selected {
   border-color: #3b82f6;
 }
+.img-mat-num {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 16px;
+}
 .img-mat-check {
   position: absolute;
   top: 4px;
@@ -1910,10 +1925,181 @@
   font-size: 12px;
   color: var(--ink-faint);
 }
+.img-prompt-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  position: relative;
+  border-radius: 12px;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+.img-prompt-stack.is-ref-drag,
+.img-hotspot-prompts.is-ref-drag {
+  background: rgba(0, 210, 255, 0.08);
+  box-shadow: inset 0 0 0 2px var(--holo);
+}
+.img-prompt-ref-drop-hint {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--holo-deep);
+  font-size: 13px;
+  font-weight: 700;
+}
 .img-prompt-row {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+.img-prompt-ref-plus {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px dashed var(--line-strong);
+  background: var(--white);
+  color: var(--holo-deep);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.img-prompt-ref-plus:hover:not(:disabled) {
+  border-color: var(--holo);
+  background: var(--holo-soft);
+}
+.img-prompt-ref-plus:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.img-prompt-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.img-prompt-ref-chip {
+  position: relative;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  flex-shrink: 0;
+}
+.img-prompt-ref-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+}
+.img-prompt-ref-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.img-prompt-ref-label {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 16px;
+}
+.img-prompt-ref-del {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.img-prompt-ref-del:hover:not(:disabled) {
+  background: #dc2626;
+}
+.img-ref-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(15, 23, 32, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.img-ref-lightbox-panel {
+  max-width: min(920px, 96vw);
+  max-height: 92vh;
+  background: var(--white);
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.img-ref-lightbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.img-ref-lightbox-close {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 14px;
+}
+.img-ref-lightbox-close:hover {
+  background: var(--canvas);
+  color: var(--ink);
+}
+.img-ref-lightbox-img {
+  display: block;
+  max-width: min(920px, 96vw);
+  max-height: calc(92vh - 52px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  background: #0f1720;
 }
 .img-prompt-input {
   flex: 1;
