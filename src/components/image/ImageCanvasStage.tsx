@@ -201,9 +201,10 @@ export function ImageCanvasStage() {
       stage.classList.remove('is-panning');
     };
 
-    const onAuxClick = (e: MouseEvent) => {
+    const onAuxClick = (e: Event) => {
       // Prevent middle-click default (e.g. auto-scroll) while panning zoomed image
-      if (e.button === 1 && viewScale > 1.001) e.preventDefault();
+      const me = e as globalThis.MouseEvent;
+      if (me.button === 1 && viewScale > 1.001) e.preventDefault();
     };
 
     stage.addEventListener('wheel', onWheel, { passive: false });
