@@ -34,7 +34,7 @@ export function RetouchToolbar() {
       <button
         type="button"
         className={`img-tool-btn${tool === 'select' ? ' active' : ''}`}
-        title="选择工具（滚轮缩放；右键拖拽平移；Esc 回到此工具）"
+        title="选择工具（滚轮缩放；放大后中键拖拽平移；Esc 回到此工具）"
         onClick={() => setTool('select')}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>

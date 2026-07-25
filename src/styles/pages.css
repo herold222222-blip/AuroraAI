@@ -1572,20 +1572,13 @@
   position: relative;
   overflow: hidden;
 }
-.img-stage.is-select-tool {
-  cursor: default;
-}
-.img-stage.is-select-tool.is-zoomed {
-  cursor: grab;
-}
-.img-stage.is-select-tool.is-panning,
-.img-stage.is-select-tool.is-zoomed.is-panning {
+.img-stage.is-zoomed.is-panning {
   cursor: grabbing;
 }
 .img-view-reset {
   position: absolute;
   top: 10px;
-  right: 10px;
+  left: 10px;
   z-index: 5;
   height: 30px;
   padding: 0 12px;

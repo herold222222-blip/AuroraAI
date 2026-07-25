@@ -149,14 +149,14 @@ export function ImageCanvasStage() {
     undoLastHotspot,
   ]);
 
-  // Select tool: wheel zoom + right-drag pan
+  // Retouch: wheel zoom (any tool). Zoomed: middle-button drag pan (any tool).
   useEffect(() => {
     const stage = wrapRef.current;
     if (!stage) return;
 
     const onWheel = (e: WheelEvent) => {
       const state = useImageStore.getState();
-      if (state.tab !== 'retouch' || state.retouchTool !== 'select') return;
+      if (state.tab !== 'retouch') return;
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       setViewScale((prev) => {
@@ -171,8 +171,9 @@ export function ImageCanvasStage() {
 
     const onPointerDown = (e: PointerEvent) => {
       const state = useImageStore.getState();
-      if (state.tab !== 'retouch' || state.retouchTool !== 'select') return;
-      if (e.button !== 2) return;
+      if (state.tab !== 'retouch') return;
+      // Middle mouse button — pan while zoomed, works for select / brush / point
+      if (e.button !== 1) return;
       if (viewScale <= 1.001) return;
       e.preventDefault();
       panning.current = true;
@@ -200,11 +201,9 @@ export function ImageCanvasStage() {
       stage.classList.remove('is-panning');
     };
 
-    const onContextMenu = (e: Event) => {
-      const state = useImageStore.getState();
-      if (state.tab === 'retouch' && state.retouchTool === 'select') {
-        e.preventDefault();
-      }
+    const onAuxClick = (e: MouseEvent) => {
+      // Prevent middle-click default (e.g. auto-scroll) while panning zoomed image
+      if (e.button === 1 && viewScale > 1.001) e.preventDefault();
     };
 
     stage.addEventListener('wheel', onWheel, { passive: false });
@@ -212,14 +211,14 @@ export function ImageCanvasStage() {
     stage.addEventListener('pointermove', onPointerMove);
     stage.addEventListener('pointerup', endPan);
     stage.addEventListener('pointercancel', endPan);
-    stage.addEventListener('contextmenu', onContextMenu);
+    stage.addEventListener('auxclick', onAuxClick);
     return () => {
       stage.removeEventListener('wheel', onWheel);
       stage.removeEventListener('pointerdown', onPointerDown);
       stage.removeEventListener('pointermove', onPointerMove);
       stage.removeEventListener('pointerup', endPan);
       stage.removeEventListener('pointercancel', endPan);
-      stage.removeEventListener('contextmenu', onContextMenu);
+      stage.removeEventListener('auxclick', onAuxClick);
     };
   }, [viewScale, currentUrl]);
 
@@ -247,13 +246,14 @@ export function ImageCanvasStage() {
   const toImageCoords = (e: MouseEvent) => {
     const img = imgRef.current!;
     const rect = img.getBoundingClientRect();
-    const nx = (e.clientX - rect.left) / rect.width;
-    const ny = (e.clientY - rect.top) / rect.height;
+    // Visual rect accounts for CSS zoom/pan; map back to layout/canvas space
+    const nx = (e.clientX - rect.left) / Math.max(1, rect.width);
+    const ny = (e.clientY - rect.top) / Math.max(1, rect.height);
     return {
       x: nx * img.naturalWidth,
       y: ny * img.naturalHeight,
-      lx: e.clientX - rect.left,
-      ly: e.clientY - rect.top,
+      lx: nx * img.clientWidth,
+      ly: ny * img.clientHeight,
     };
   };
 
@@ -364,14 +364,9 @@ export function ImageCanvasStage() {
       onMouseDown={onBrushMouseDown}
       onMouseMove={(e) => {
         if (tab === 'retouch' && retouchTool === 'brush') {
-          const img = imgRef.current!;
-          const rect = img.getBoundingClientRect();
-          setCursor({
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-          });
+          const p = toImageCoords(e);
+          setCursor({ x: p.lx, y: p.ly });
           if (painting.current) {
-            const p = toImageCoords(e);
             paintStrokeAt(p.lx, p.ly);
           }
         } else {
@@ -384,11 +379,9 @@ export function ImageCanvasStage() {
     />
   );
 
-  const selectMode = tab === 'retouch' && retouchTool === 'select';
-
   return (
     <div
-      className={`img-stage${selectMode ? ' is-select-tool' : ''}${viewAltered ? ' is-zoomed' : ''}`}
+      className={`img-stage${viewAltered ? ' is-zoomed' : ''}`}
       ref={wrapRef}
     >
       {viewAltered && (
