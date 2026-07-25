@@ -9,7 +9,7 @@ export type ImageEditorTab =
   | 'filter'
   | 'style';
 
-export type RetouchTool = 'point' | 'brush' | 'eraser';
+export type RetouchTool = 'select' | 'point' | 'brush' | 'eraser';
 
 export interface HotspotPoint {
   id: string;
@@ -182,7 +182,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
   showCompare: false,
 
   tab: 'retouch',
-  retouchTool: 'point',
+  retouchTool: 'select',
   brushSize: 28,
   hotspots: [],
   brushRegions: [],

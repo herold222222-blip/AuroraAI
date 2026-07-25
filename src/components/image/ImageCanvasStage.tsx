@@ -68,8 +68,20 @@ export function ImageCanvasStage() {
   const [split, setSplit] = useState(50);
   const [compareW, setCompareW] = useState(0);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [viewScale, setViewScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
   const painting = useRef(false);
   const strokeDirty = useRef(false);
+  const panning = useRef(false);
+  const panLast = useRef({ x: 0, y: 0 });
+
+  const resetView = useCallback(() => {
+    setViewScale(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  const viewAltered =
+    viewScale > 1.02 || Math.abs(pan.x) > 1 || Math.abs(pan.y) > 1;
 
   const syncCanvasSize = useCallback((canvas: HTMLCanvasElement | null) => {
     const img = imgRef.current;
@@ -105,6 +117,10 @@ export function ImageCanvasStage() {
   }, [brushRegions, refreshOverlay]);
 
   useEffect(() => {
+    resetView();
+  }, [currentUrl, resetView]);
+
+  useEffect(() => {
     if (retouchTool !== 'eraser') return;
     const { brushRegions: regions, hotspots: pts } = useImageStore.getState();
     if (regions.length) {
@@ -123,7 +139,7 @@ export function ImageCanvasStage() {
         stroke.getContext('2d')!.clearRect(0, 0, stroke.width, stroke.height);
       }
       setHasMask(false);
-      setRetouchTool('point');
+      setRetouchTool('select');
     }
   }, [
     retouchTool,
@@ -132,6 +148,80 @@ export function ImageCanvasStage() {
     undoLastBrushRegion,
     undoLastHotspot,
   ]);
+
+  // Select tool: wheel zoom + right-drag pan
+  useEffect(() => {
+    const stage = wrapRef.current;
+    if (!stage) return;
+
+    const onWheel = (e: WheelEvent) => {
+      const state = useImageStore.getState();
+      if (state.tab !== 'retouch' || state.retouchTool !== 'select') return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setViewScale((prev) => {
+        const next = Math.min(5, Math.max(1, prev * factor));
+        if (next <= 1.001) {
+          setPan({ x: 0, y: 0 });
+          return 1;
+        }
+        return next;
+      });
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      const state = useImageStore.getState();
+      if (state.tab !== 'retouch' || state.retouchTool !== 'select') return;
+      if (e.button !== 2) return;
+      if (viewScale <= 1.001) return;
+      e.preventDefault();
+      panning.current = true;
+      panLast.current = { x: e.clientX, y: e.clientY };
+      stage.setPointerCapture(e.pointerId);
+      stage.classList.add('is-panning');
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!panning.current) return;
+      const dx = e.clientX - panLast.current.x;
+      const dy = e.clientY - panLast.current.y;
+      panLast.current = { x: e.clientX, y: e.clientY };
+      setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
+    };
+
+    const endPan = (e: PointerEvent) => {
+      if (!panning.current) return;
+      panning.current = false;
+      try {
+        stage.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+      stage.classList.remove('is-panning');
+    };
+
+    const onContextMenu = (e: Event) => {
+      const state = useImageStore.getState();
+      if (state.tab === 'retouch' && state.retouchTool === 'select') {
+        e.preventDefault();
+      }
+    };
+
+    stage.addEventListener('wheel', onWheel, { passive: false });
+    stage.addEventListener('pointerdown', onPointerDown);
+    stage.addEventListener('pointermove', onPointerMove);
+    stage.addEventListener('pointerup', endPan);
+    stage.addEventListener('pointercancel', endPan);
+    stage.addEventListener('contextmenu', onContextMenu);
+    return () => {
+      stage.removeEventListener('wheel', onWheel);
+      stage.removeEventListener('pointerdown', onPointerDown);
+      stage.removeEventListener('pointermove', onPointerMove);
+      stage.removeEventListener('pointerup', endPan);
+      stage.removeEventListener('pointercancel', endPan);
+      stage.removeEventListener('contextmenu', onContextMenu);
+    };
+  }, [viewScale, currentUrl]);
 
   const comparing =
     Boolean(showCompare && compareBeforeUrl && compareBeforeUrl !== currentUrl);
@@ -294,9 +384,30 @@ export function ImageCanvasStage() {
     />
   );
 
+  const selectMode = tab === 'retouch' && retouchTool === 'select';
+
   return (
-    <div className="img-stage" ref={wrapRef}>
-      <div className="img-stage-frame">
+    <div
+      className={`img-stage${selectMode ? ' is-select-tool' : ''}${viewAltered ? ' is-zoomed' : ''}`}
+      ref={wrapRef}
+    >
+      {viewAltered && (
+        <button
+          type="button"
+          className="img-view-reset"
+          title="还原默认展示大小"
+          onClick={resetView}
+        >
+          还原
+        </button>
+      )}
+      <div
+        className="img-stage-frame"
+        style={{
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewScale})`,
+          transformOrigin: 'center center',
+        }}
+      >
         <div className={`img-stage-media${tab === 'crop' ? ' is-cropping' : ''}`}>
           {comparing ? (
             <div

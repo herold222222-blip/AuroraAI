@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useImageStore } from '../../image/useImageStore';
 
 export function RetouchToolbar() {
@@ -7,34 +8,38 @@ export function RetouchToolbar() {
   const brushSize = useImageStore((s) => s.brushSize);
   const setBrushSize = useImageStore((s) => s.setBrushSize);
 
+  useEffect(() => {
+    if (tab !== 'retouch') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      setTool('select');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tab, setTool]);
+
   if (tab !== 'retouch') return null;
 
   return (
     <div className="img-retouch-toolbar">
       <button
         type="button"
-        className={`img-tool-btn${tool === 'eraser' ? ' active' : ''}`}
-        title="橡皮擦：逐个撤销涂抹区域或选点"
-        onClick={() => setTool('eraser')}
+        className={`img-tool-btn${tool === 'select' ? ' active' : ''}`}
+        title="选择工具（滚轮缩放；右键拖拽平移；Esc 回到此工具）"
+        onClick={() => setTool('select')}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
           <path
-            d="M7 21h10M4.5 14.5l7-7a2 2 0 012.8 0l3.2 3.2a2 2 0 010 2.8l-7.5 7.5H4.5v-6.5z"
-            stroke="currentColor"
-            strokeWidth="1.7"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </button>
-      <button
-        type="button"
-        className={`img-tool-btn${tool === 'point' ? ' active' : ''}`}
-        title="选点工具（Shift+点击可多选；再点可选点删除）"
-        onClick={() => setTool('point')}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <path
-            d="M4 4l7.5 16 1.8-6.7L20 11.5 4 4z"
+            d="M5.5 3.5l14 8.2-6.2 1.6-1.6 6.2L5.5 3.5z"
             stroke="currentColor"
             strokeWidth="1.7"
             strokeLinejoin="round"
@@ -49,7 +54,38 @@ export function RetouchToolbar() {
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
           <path
-            d="M4 20l4.5-1.5L19 8a2.1 2.1 0 00-3-3L5.5 15.5 4 20z"
+            fill="currentColor"
+            d="M10.6 2.8c.72 0 1.3.58 1.3 1.3v7.05c.18-.08.38-.12.58-.12.5 0 .95.22 1.25.6.22-.28.56-.46.95-.46.72 0 1.3.58 1.3 1.3v.95c.2-.08.42-.12.65-.12.72 0 1.3.58 1.3 1.3v2.35c0 1.55-.55 3.05-1.55 4.2l-.55.65c-.42.5-1.05.78-1.7.78H9.55c-.95 0-1.82-.5-2.3-1.32L5.05 16.9c-.52-.9-.18-2.05.75-2.52l1.72-.88c.32-.16.7-.18 1.05-.05l.73.3V4.1c0-.72.58-1.3 1.3-1.3z"
+          />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`img-tool-btn${tool === 'point' ? ' active' : ''}`}
+        title="选点工具（Shift+点击可多选；再点可选点删除）"
+        onClick={() => setTool('point')}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <circle cx="12" cy="12" r="4.2" fill="currentColor" />
+          <circle
+            cx="12"
+            cy="12"
+            r="8"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            opacity="0.45"
+          />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className={`img-tool-btn${tool === 'eraser' ? ' active' : ''}`}
+        title="橡皮擦：逐个撤销涂抹区域或选点"
+        onClick={() => setTool('eraser')}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <path
+            d="M7 21h10M4.5 14.5l7-7a2 2 0 012.8 0l3.2 3.2a2 2 0 010 2.8l-7.5 7.5H4.5v-6.5z"
             stroke="currentColor"
             strokeWidth="1.7"
             strokeLinejoin="round"

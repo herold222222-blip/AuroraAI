@@ -46,7 +46,7 @@ export interface ImageProjectBag {
   compareBeforeUrl: string | null;
   showCompare: boolean;
   tab: 'retouch' | 'crop' | 'adjust' | 'filter' | 'style';
-  retouchTool: 'point' | 'brush' | 'eraser';
+  retouchTool: 'select' | 'point' | 'brush' | 'eraser';
   brushSize: number;
   prompt: string;
   materials: { id: string; url: string; selected: boolean }[];
@@ -78,7 +78,7 @@ export function emptyImageBag(): ImageProjectBag {
     compareBeforeUrl: null,
     showCompare: false,
     tab: 'retouch',
-    retouchTool: 'point',
+    retouchTool: 'select',
     brushSize: 28,
     prompt: '',
     materials: [],

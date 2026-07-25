@@ -149,7 +149,7 @@ export function ImageRightSidebar() {
         />
         <button
           type="button"
-          className="btn ghost block"
+          className="btn holo block"
           style={{ marginTop: 12 }}
           onClick={() => fileRef.current?.click()}
         >
