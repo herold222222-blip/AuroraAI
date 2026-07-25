@@ -9,6 +9,9 @@ import { ImageWorkbench } from './components/pages/ImageWorkbench';
 import { Toasts } from './components/common/Toasts';
 import { AppSidebar } from './components/common/AppSidebar';
 import { TopBar } from './components/common/TopBar';
+import { AuthGuard } from './components/common/AuthGuard';
+import { LoginModal } from './components/common/LoginModal';
+import { useAuthStore } from './store/useAuthStore';
 
 function RouteProgress({ view }: { view: string }) {
   const [width, setWidth] = useState(0);
@@ -42,6 +45,7 @@ export default function App() {
   const view = useAppStore((s) => s.view);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
+  const requireAuth = useAuthStore((s) => s.requireAuth);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -53,16 +57,18 @@ export default function App() {
         return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
+        if (!requireAuth()) return;
         if (e.shiftKey) redo();
         else undo();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
+        if (!requireAuth()) return;
         redo();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo]);
+  }, [undo, redo, requireAuth]);
 
   const topBar =
     view === 'image' ? (
@@ -77,6 +83,8 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <AuthGuard />
+      <LoginModal />
       {topBar}
       <div className="app-body">
         <AppSidebar />

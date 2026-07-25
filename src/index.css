@@ -273,6 +273,40 @@ select {
   align-items: center;
   gap: 6px;
 }
+.topbar-user {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--holo);
+  padding: 0 8px;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.login-demo-hint {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(0, 210, 255, 0.08);
+  border: 1px solid rgba(0, 210, 255, 0.22);
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.login-demo-hint code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 700;
+  color: var(--ink);
+}
+.login-demo-sep {
+  margin: 0 8px;
+  color: var(--ink-faint);
+}
+.login-error {
+  margin: 10px 0 0;
+  color: #dc2626;
+  font-size: 13px;
+}
 
 .project-name {
   display: inline-flex;

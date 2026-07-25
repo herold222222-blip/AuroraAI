@@ -159,7 +159,7 @@ export function AppSidebar() {
   };
 
   return (
-    <aside className="app-sidebar" aria-label="主导航">
+    <aside className="app-sidebar" aria-label="主导航" data-auth-free>
       <div className="app-sidebar-top">
         {TOP_NAV.map((item) => (
           <button

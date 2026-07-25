@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { Logo } from './Logo';
 import { Modal } from './Modal';
 import { ProjectSwitcher } from './ProjectSwitcher';
@@ -18,14 +19,21 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
   const redo = useAppStore((s) => s.redo);
   const pushToast = useAppStore((s) => s.pushToast);
 
+  const user = useAuthStore((s) => s.user);
+  const openLogin = useAuthStore((s) => s.openLogin);
+  const logout = useAuthStore((s) => s.logout);
+  const requireAuth = useAuthStore((s) => s.requireAuth);
+
   const [help, setHelp] = useState(false);
-  const [login, setLogin] = useState(false);
 
   return (
     <header className="topbar">
       <div
         className="brand"
-        onClick={logoReset}
+        onClick={() => {
+          if (!requireAuth()) return;
+          logoReset();
+        }}
         title="点击 Logo 清空当前项目数据并返回上传首页"
       >
         <Logo />
@@ -45,7 +53,12 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
       {variant === 'workbench' && (
         <>
           <div className="topbar-divider" />
-          <button className="tb-btn" onClick={back}>
+          <button
+            type="button"
+            className="tb-btn"
+            data-auth-free
+            onClick={back}
+          >
             ← 返回
           </button>
         </>
@@ -60,6 +73,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
             </span>
             <div style={{ flex: 1 }} />
             <button
+              type="button"
               className="tb-btn icon"
               title="撤销 (Ctrl+Z)"
               onClick={undo}
@@ -67,6 +81,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
               ↶
             </button>
             <button
+              type="button"
               className="tb-btn icon"
               title="重做 (Ctrl+Y)"
               onClick={redo}
@@ -77,79 +92,69 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
         )}
       </div>
 
-      <div className="topbar-right">
-        <button className="tb-btn" onClick={() => setHelp(true)}>
+      <div className="topbar-right" data-auth-free>
+        <button type="button" className="tb-btn" onClick={() => setHelp(true)}>
           帮助
         </button>
-        <button className="tb-btn" onClick={() => setLogin(true)}>
-          登录
-        </button>
+        {user ? (
+          <>
+            <span className="topbar-user" title="已登录">
+              {user}
+            </span>
+            <button
+              type="button"
+              className="tb-btn"
+              onClick={() => {
+                logout();
+                pushToast('已退出登录', 'info');
+              }}
+            >
+              退出
+            </button>
+          </>
+        ) : (
+          <button type="button" className="tb-btn" onClick={openLogin}>
+            登录
+          </button>
+        )}
       </div>
 
       {help && (
-        <Modal
-          title="帮助中心"
-          subtitle="Aurora 使用流程"
-          onClose={() => setHelp(false)}
-        >
-          <ol
-            style={{
-              paddingLeft: 18,
-              lineHeight: 1.9,
-              color: 'var(--ink-soft)',
-              fontSize: 14,
-            }}
+        <div data-auth-free>
+          <Modal
+            title="帮助中心"
+            subtitle="Aurora 使用流程"
+            onClose={() => setHelp(false)}
           >
-            <li>上传一张 2D 景观意向图（支持 JPG / PNG / WEBP）。</li>
-            <li>
-              点击「⚡分析场景图层」，AI 自动拆分地形、植被、水体、构筑物等专业图层。
-            </li>
-            <li>在 2D 智能色块工作台调整图层，发起 3D 模型生成。</li>
-            <li>
-              在 3D 工作台执行拆分 / 合并 / 材质编辑，最终导出或同步至设计软件。
-            </li>
-            <li>
-              顶部项目下拉可切换/新建项目；仅同一项目内模型截图与图片编辑互通。
-            </li>
-          </ol>
-          <p style={{ color: 'var(--ink-faint)', fontSize: 12, marginTop: 8 }}>
-            提示：点击左上角 Aurora Logo 可清空当前项目并返回首页；「返回」按钮仅退回上一级并保留配置。
-          </p>
-        </Modal>
-      )}
-
-      {login && (
-        <Modal
-          title="登录 Aurora"
-          subtitle="MVP 演示环境，登录仅作占位"
-          width={400}
-          onClose={() => setLogin(false)}
-          footer={
-            <>
-              <button className="btn ghost" onClick={() => setLogin(false)}>
-                取消
-              </button>
-              <button
-                className="btn holo"
-                onClick={() => {
-                  setLogin(false);
-                  pushToast('演示环境已跳过登录', 'info');
-                }}
-              >
-                登录
-              </button>
-            </>
-          }
-        >
-          <div className="field">
-            <label className="field-label">手机号 / 邮箱</label>
-            <input className="input" placeholder="请输入账号" />
-          </div>
-          <div className="field">
-            <label className="field-label">密码</label>
-            <input className="input" type="password" placeholder="请输入密码" />
-          </div>
-        </Modal>
+            <ol
+              style={{
+                paddingLeft: 18,
+                lineHeight: 1.9,
+                color: 'var(--ink-soft)',
+                fontSize: 14,
+              }}
+            >
+              <li>上传一张 2D 景观意向图（支持 JPG / PNG / WEBP）。</li>
+              <li>
+                点击「⚡分析场景图层」，AI 自动拆分地形、植被、水体、构筑物等专业图层。
+              </li>
+              <li>在 2D 智能色块工作台调整图层，发起 3D 模型生成。</li>
+              <li>
+                在 3D 工作台执行拆分 / 合并 / 材质编辑，最终导出或同步至设计软件。
+              </li>
+              <li>
+                顶部项目下拉可切换/新建项目；仅同一项目内模型截图与图片编辑互通。
+              </li>
+              <li>
+                Demo 演示版：访客可浏览页面；使用功能需登录。如需获取访问权限，联系万生
+                19806651984（暂不开放注册）。
+              </li>
+            </ol>
+            <p style={{ color: 'var(--ink-faint)', fontSize: 12, marginTop: 8 }}>
+              提示：点击左上角 Aurora Logo 可清空当前项目并返回首页；「返回」按钮仅退回上一级并保留配置。
+            </p>
+          </Modal>
+        </div>
       )}
     </header>
   );
