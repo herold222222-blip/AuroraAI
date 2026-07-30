@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
+import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import type { Layer } from '../../types';
 
 const HIDDEN_MASK: [number, number, number] = [42, 44, 48];
@@ -50,6 +51,7 @@ export function Canvas2D() {
   const layers = useAppStore((s) => s.layers);
   const selectedIds = useAppStore((s) => s.selectedLayerIds);
   const selectLayer = useAppStore((s) => s.selectLayer);
+  const openDownloadMenu = useImageDownloadMenu();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -234,7 +236,14 @@ export function Canvas2D() {
       <div className="canvas-stage">
         {image && grid ? (
           <div className="canvas-frame">
-            <img src={image.url} alt="意向图底图" className="canvas-base" />
+            <img
+              src={image.url}
+              alt="意向图底图"
+              className="canvas-base"
+              onContextMenu={(e) =>
+                openDownloadMenu(e, image.url, image.name || 'aurora-base')
+              }
+            />
             <canvas
               ref={canvasRef}
               className="canvas-mask"

@@ -69,7 +69,13 @@ export function ImageBottomControls() {
     }
     setBusy(true);
     try {
-      const out = await runAiEdit({ prompt: p.trim(), systemHint, forceGlobal });
+      const trimmed = p.trim();
+      useImageStore.getState().setLastGeneratePrompt(trimmed);
+      const out = await runAiEdit({
+        prompt: trimmed,
+        systemHint,
+        forceGlobal,
+      });
       const localEdit =
         !forceGlobal &&
         (useImageStore.getState().hotspots.length > 0 ||
@@ -78,6 +84,7 @@ export function ImageBottomControls() {
       commitImage(out, {
         compareFrom: currentUrl,
         skipCompare: localEdit,
+        prompt: trimmed,
       });
       pushToast('生成完成', 'success');
     } catch (err) {

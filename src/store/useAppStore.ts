@@ -15,21 +15,32 @@ import type {
   EditTool,
   ModelSnapshot,
 } from '../types';
-import { uid, newLayerMaterial, MATERIAL_LIBRARY, matchLibrarySwatch, materialFromSwatch } from '../data/defaultLayers';
+import { uid, newLayerMaterial, MATERIAL_LIBRARY, matchLibrarySwatch, materialFromSwatch, isMeshyModel, DEFAULT_AI_MODEL, resolveAiModel } from '../data/defaultLayers';
 import { runSceneAI } from '../ai/pipeline';
 import { generateFallbackScene } from '../ai/fallback';
 import { buildScene } from '../ai/scene';
 import { useImageStore } from '../image/useImageStore';
+import { createMeshyImageTo3d, pollMeshyImageTo3d } from '../ai/meshyApi';
 import {
   cloneGrid,
   cloneLayers,
+  defaultFormalProjectName,
   emptyImageBag,
   emptyModelBag,
+  isScratchProjectId,
   newProjectId,
   projectBags,
+  SCRATCH_PROJECT_ID,
+  SCRATCH_PROJECT_NAME,
+  splitImageBagForTo3dPromote,
   type ProjectBag,
   type ProjectMeta,
 } from './projectBag';
+
+export type PendingPromoteAction =
+  | null
+  | { kind: 'toImage'; snapshotIds: string[] }
+  | { kind: 'to3d' };
 
 const HISTORY_LIMIT = 50;
 
@@ -65,6 +76,8 @@ interface AppState {
   /** all projects (meta only); bags live in projectBags Map */
   projects: ProjectMeta[];
   activeProjectId: string;
+  /** Cross-module handoff waiting for promote confirm (scratch only). */
+  pendingPromote: PendingPromoteAction;
 
   // AI analysis status
   aiRunning: boolean;
@@ -99,8 +112,17 @@ interface AppState {
   snapshots: ModelSnapshot[];
   /** snapshot currently enlarged over the viewport (null = show 3D) */
   viewingSnapshotId: string | null;
+  /**
+   * Snapshot ids handed to the image editor (send order).
+   * When set, image sidebar lists these synced model shots.
+   */
+  imageSessionSnapshotIds: string[] | null;
   /** last model-module view before entering image */
   lastModelView: ViewId;
+  /** Meshy Image-to-3D GLB URL when using Meshy model */
+  meshyModelUrl: string | null;
+  /** After analysis completes, auto-run build3D (used by「重新分层再构建」). */
+  pendingBuildAfterAnalysis: boolean;
 
   goto: (view: ViewId) => void;
   startTransition: (progressView: ViewId, target: ViewId) => void;
@@ -113,7 +135,10 @@ interface AppState {
   analyze: () => void;
   resegment: () => void;
   runAnalysis: () => Promise<void>;
-  build3D: () => void;
+  /** Rebuild 3D; pass resegmentFirst to re-run semantic layering first. */
+  build3D: (opts?: { resegmentFirst?: boolean }) => void;
+  runMeshyBuild: () => Promise<void>;
+  setMeshyModelUrl: (url: string | null) => void;
 
   selectLayer: (id: string | null, additive?: boolean) => void;
   selectAllLayers: () => void;
@@ -121,9 +146,27 @@ interface AppState {
   setLayerFilter: (f: LayerFilter) => void;
   setProjectName: (name: string) => void;
   switchProject: (id: string) => void;
+  /**
+   * Promote current work into a new formal project and enter it.
+   * If active is scratch, scratch is reset to empty (unless retainOtherImageAlbumsInScratch);
+   * otherwise current project is kept (另存副本).
+   */
+  promoteCurrentToProject: (
+    name?: string,
+    opts?: { retainOtherImageAlbumsInScratch?: boolean },
+  ) => string | null;
+  /** @deprecated alias — use promoteCurrentToProject */
   createProject: (name?: string) => void;
+  /** Create an empty formal project and switch to it (keeps current project). */
+  createBlankProject: (name?: string) => string | null;
+  /** Delete a formal project (scratch cannot be deleted). */
+  removeProject: (id: string) => boolean;
   /** capture active project into projectBags */
   saveActiveProjectBag: () => void;
+  requestPromoteForToImage: (snapshotIds: string[]) => void;
+  requestPromoteForTo3d: () => void;
+  confirmPendingPromote: (name?: string) => void;
+  cancelPendingPromote: () => void;
   addLayer: (name: string, dimension: Dimension) => void;
   removeLayer: (id: string) => void;
   toggleVisibility: (id: string) => void;
@@ -159,6 +202,13 @@ interface AppState {
   setViewingSnapshot: (id: string | null) => void;
   enterImageModule: () => void;
   enterModelModule: () => void;
+  /** Send selected model snapshots into the image editor (single or multi). */
+  sendSnapshotsToImage: (ids: string[]) => void;
+  /** Hand off image-editor `currentUrl` into 图生模型 (analyze → 2D → 3D). */
+  start3DFromImageEditor: () => void;
+  /** Internal: run after promote gate. */
+  executeSendSnapshotsToImage: (ids: string[]) => void;
+  executeStart3DFromImageEditor: () => void;
   updateLayerTransform: (
     id: string,
     patch: Partial<{
@@ -187,11 +237,11 @@ interface AppState {
 }
 
 const DEFAULT_CONFIG: ModelConfig = {
-  aiModel: 'Aurora-Depth v2 (景观优化)',
+  aiModel: DEFAULT_AI_MODEL,
   textureGen: true,
   textureQuality: '2K',
   pbr: true,
-  topology: 'quad',
+  topology: 'triangle',
   faceQuality: 'auto',
 };
 
@@ -269,9 +319,36 @@ export const useAppStore = create<AppState>((set, get) => {
         cameraMode: s.cameraMode,
         snapshots: s.snapshots.map((x) => ({ ...x })),
         viewingSnapshotId: s.viewingSnapshotId,
+        imageSessionSnapshotIds: s.imageSessionSnapshotIds
+          ? [...s.imageSessionSnapshotIds]
+          : null,
+        meshyModelUrl: s.meshyModelUrl,
       },
       image: useImageStore.getState().exportBag(),
     };
+  };
+
+  const emptyBag = (): ProjectBag => ({
+    model: emptyModelBag({
+      config: DEFAULT_CONFIG,
+      viewport: DEFAULT_VIEWPORT,
+      exportSettings: DEFAULT_EXPORT,
+      materialLibrary: MATERIAL_LIBRARY,
+    }),
+    image: emptyImageBag(),
+  });
+
+  const ensureScratchMeta = (list: ProjectMeta[]): ProjectMeta[] => {
+    const scratch: ProjectMeta = {
+      id: SCRATCH_PROJECT_ID,
+      name: SCRATCH_PROJECT_NAME,
+      updatedAt: Date.now(),
+      kind: 'scratch',
+    };
+    const rest = list
+      .filter((p) => !isScratchProjectId(p.id))
+      .map((p) => ({ ...p, kind: p.kind ?? ('project' as const) }));
+    return [scratch, ...rest];
   };
 
   const hydrateBag = (bag: ProjectBag, projectName: string) => {
@@ -292,7 +369,10 @@ export const useAppStore = create<AppState>((set, get) => {
       aiProgress: 0,
       aiError: null,
       aiUsedFallback: false,
-      config: { ...m.config },
+      config: {
+        ...m.config,
+        aiModel: resolveAiModel(m.config.aiModel),
+      },
       viewport: { ...m.viewport },
       exportSettings: { ...m.exportSettings },
       past: [],
@@ -305,23 +385,16 @@ export const useAppStore = create<AppState>((set, get) => {
       cameraMode: m.cameraMode,
       snapshots: m.snapshots.map((x) => ({ ...x })),
       viewingSnapshotId: m.viewingSnapshotId,
+      imageSessionSnapshotIds: m.imageSessionSnapshotIds
+        ? [...m.imageSessionSnapshotIds]
+        : null,
+      meshyModelUrl: m.meshyModelUrl ?? null,
+      pendingBuildAfterAnalysis: false,
     });
     useImageStore.getState().importBag(bag.image);
   };
 
-  const initialProjectId = newProjectId();
-  projectBags.set(
-    initialProjectId,
-    {
-      model: emptyModelBag({
-        config: DEFAULT_CONFIG,
-        viewport: DEFAULT_VIEWPORT,
-        exportSettings: DEFAULT_EXPORT,
-        materialLibrary: MATERIAL_LIBRARY,
-      }),
-      image: emptyImageBag(),
-    },
-  );
+  projectBags.set(SCRATCH_PROJECT_ID, emptyBag());
 
   return {
     view: 'upload',
@@ -332,15 +405,17 @@ export const useAppStore = create<AppState>((set, get) => {
     selectedLayerId: null,
     selectedLayerIds: [],
     layerFilter: 'all',
-    projectName: '未命名景观方案',
+    projectName: SCRATCH_PROJECT_NAME,
     projects: [
       {
-        id: initialProjectId,
-        name: '未命名景观方案',
+        id: SCRATCH_PROJECT_ID,
+        name: SCRATCH_PROJECT_NAME,
         updatedAt: Date.now(),
+        kind: 'scratch',
       },
     ],
-    activeProjectId: initialProjectId,
+    activeProjectId: SCRATCH_PROJECT_ID,
+    pendingPromote: null,
     aiRunning: false,
     aiStage: '',
     aiProgress: 0,
@@ -360,7 +435,10 @@ export const useAppStore = create<AppState>((set, get) => {
     cameraMode: false,
     snapshots: [],
     viewingSnapshotId: null,
+    imageSessionSnapshotIds: null,
     lastModelView: 'upload' as ViewId,
+    meshyModelUrl: null,
+    pendingBuildAfterAnalysis: false,
 
     goto: (view) => set({ view, transitionTo: null }),
     startTransition: (progressView, target) =>
@@ -380,20 +458,180 @@ export const useAppStore = create<AppState>((set, get) => {
       });
     },
 
+    sendSnapshotsToImage: (ids) => {
+      const unique = [...new Set(ids.filter(Boolean))];
+      if (!unique.length) {
+        get().pushToast('请先选择至少一张模型快照', 'info');
+        return;
+      }
+      if (isScratchProjectId(get().activeProjectId)) {
+        set({ pendingPromote: { kind: 'toImage', snapshotIds: unique } });
+        return;
+      }
+      get().executeSendSnapshotsToImage(unique);
+    },
+
+    start3DFromImageEditor: () => {
+      if (isScratchProjectId(get().activeProjectId)) {
+        set({ pendingPromote: { kind: 'to3d' } });
+        return;
+      }
+      get().executeStart3DFromImageEditor();
+    },
+
+    requestPromoteForToImage: (snapshotIds) => {
+      const unique = [...new Set(snapshotIds.filter(Boolean))];
+      if (!unique.length) {
+        get().pushToast('请先选择至少一张模型快照', 'info');
+        return;
+      }
+      set({ pendingPromote: { kind: 'toImage', snapshotIds: unique } });
+    },
+
+    requestPromoteForTo3d: () => set({ pendingPromote: { kind: 'to3d' } }),
+
+    cancelPendingPromote: () => set({ pendingPromote: null }),
+
+    confirmPendingPromote: (name) => {
+      const pending = get().pendingPromote;
+      if (!pending) return;
+      const id = get().promoteCurrentToProject(
+        name?.trim() || defaultFormalProjectName(),
+        {
+          // 图生模型：只带走当前原图，其余原图留在未立项空间
+          retainOtherImageAlbumsInScratch: pending.kind === 'to3d',
+        },
+      );
+      if (!id) {
+        set({ pendingPromote: null });
+        return;
+      }
+      const action = pending;
+      set({ pendingPromote: null });
+      if (action.kind === 'toImage') {
+        get().executeSendSnapshotsToImage(action.snapshotIds);
+      } else {
+        get().executeStart3DFromImageEditor();
+      }
+    },
+
+    executeSendSnapshotsToImage: (ids) => {
+      const unique = [...new Set(ids.filter(Boolean))];
+      if (!unique.length) {
+        get().pushToast('请先选择至少一张模型快照', 'info');
+        return;
+      }
+      const shots = get().snapshots;
+      const ordered = unique
+        .map((id) => shots.find((s) => s.id === id))
+        .filter((s): s is ModelSnapshot => Boolean(s));
+      if (!ordered.length) {
+        get().pushToast('所选快照已不存在，请重新选择', 'warning');
+        return;
+      }
+      const first = ordered[0];
+      const cur = get().view;
+      set({
+        imageSessionSnapshotIds: ordered.map((s) => s.id),
+        viewingSnapshotId: null,
+        lastModelView: cur !== 'image' ? cur : get().lastModelView,
+        view: 'image',
+        transitionTo: null,
+      });
+      useImageStore.getState().importSnapshotAlbums(
+        ordered.map((s) => ({ id: s.id, url: s.url, label: s.label })),
+      );
+      get().pushToast(
+        ordered.length === 1
+          ? `已同步「${first.label}」到图片工具`
+          : `已同步 ${ordered.length} 张模型截图到图片工具`,
+        'success',
+      );
+    },
+
+    executeStart3DFromImageEditor: () => {
+      void (async () => {
+        const img = useImageStore.getState();
+        let url = await img.getWorkingImageUrl();
+        if (!url) {
+          get().pushToast('请先在图片模块载入一张图片', 'info');
+          return;
+        }
+        if (img.overlays.length) {
+          await img.flattenOverlays();
+          url = useImageStore.getState().currentUrl ?? url;
+        }
+        let handoff = url;
+        let sourceSnapUrl = url;
+        if (url.startsWith('blob:')) {
+          try {
+            const res = await fetch(url);
+            const blob = await res.blob();
+            handoff = URL.createObjectURL(blob);
+            // Separate blob so setImage revoke won't break the snapshot.
+            sourceSnapUrl = URL.createObjectURL(blob);
+          } catch {
+            /* keep original */
+          }
+        } else {
+          // data:/http(s): — clone into a blob snapshot when possible
+          try {
+            const res = await fetch(url);
+            const blob = await res.blob();
+            sourceSnapUrl = URL.createObjectURL(blob);
+          } catch {
+            sourceSnapUrl = url;
+          }
+        }
+
+        const albumLabel =
+          img.sourceAlbums.find((a) => a.id === img.activeSourceId)?.label ||
+          '来源原图';
+
+        const prevSource = get().snapshots.filter((s) => s.fromSourceImage);
+        prevSource.forEach((s) => {
+          if (s.url.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(s.url);
+            } catch {
+              /* ignore */
+            }
+          }
+        });
+
+        const sourceShot: ModelSnapshot = {
+          id: uid('snap'),
+          url: sourceSnapUrl,
+          createdAt: Date.now(),
+          label: albumLabel,
+          fromSourceImage: true,
+        };
+
+        get().setImage({
+          url: handoff,
+          name: '图片模块-图生模型.png',
+          size: 0,
+        });
+        set({
+          snapshots: [
+            sourceShot,
+            ...get().snapshots.filter((s) => !s.fromSourceImage),
+          ],
+        });
+        get().pushToast('已进入图生模型流程，原图已写入模型快照', 'success');
+        get().analyze();
+      })();
+    },
+
     logoReset: () => {
-      const { image, activeProjectId, projectName } = get();
+      const { image, activeProjectId } = get();
       if (image?.url?.startsWith('blob:')) URL.revokeObjectURL(image.url);
-      const bag: ProjectBag = {
-        model: emptyModelBag({
-          config: DEFAULT_CONFIG,
-          viewport: DEFAULT_VIEWPORT,
-          exportSettings: DEFAULT_EXPORT,
-          materialLibrary: MATERIAL_LIBRARY,
-        }),
-        image: emptyImageBag(),
-      };
+      const bag = emptyBag();
       projectBags.set(activeProjectId, bag);
-      hydrateBag(bag, projectName);
+      const name = isScratchProjectId(activeProjectId)
+        ? SCRATCH_PROJECT_NAME
+        : get().projectName;
+      hydrateBag(bag, name);
       get().pushToast('已清空当前项目数据', 'info');
     },
 
@@ -409,13 +647,13 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setImage: (img) => {
       const prev = get().image;
-      if (prev) URL.revokeObjectURL(prev.url);
+      if (prev?.url?.startsWith('blob:')) URL.revokeObjectURL(prev.url);
       set({ image: img });
     },
 
     clearImage: () => {
       const prev = get().image;
-      if (prev) URL.revokeObjectURL(prev.url);
+      if (prev?.url?.startsWith('blob:')) URL.revokeObjectURL(prev.url);
       set({
         image: null,
         grid: null,
@@ -456,7 +694,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
       try {
         const raw = await runSceneAI(image.url, onProgress);
-        const { grid, layers } = buildScene(raw);
+        const { grid, layers } = buildScene(raw, get().config.topology);
         set({
           grid,
           layers,
@@ -467,8 +705,9 @@ export const useAppStore = create<AppState>((set, get) => {
         });
       } catch (e) {
         console.error('[Aurora] AI 分析失败，使用离线分层方案', e);
+        const detail = (e as Error)?.message?.trim() || '模型加载或推理失败';
         const raw = generateFallbackScene();
-        const { grid, layers } = buildScene(raw);
+        const { grid, layers } = buildScene(raw, get().config.topology);
         set({
           grid,
           layers,
@@ -476,21 +715,113 @@ export const useAppStore = create<AppState>((set, get) => {
           selectedLayerIds: [],
           aiRunning: false,
           aiUsedFallback: true,
-          aiError: (e as Error)?.message ?? '模型加载失败',
+          aiError: detail,
         });
       }
 
-      // advance to the workbench once analysis completes
+      // advance once analysis completes
+      if (get().pendingBuildAfterAnalysis) {
+        set({ pendingBuildAfterAnalysis: false });
+        if (get().aiUsedFallback) {
+          const detail = get().aiError;
+          const short =
+            detail && detail.length > 72 ? `${detail.slice(0, 72)}…` : detail;
+          get().pushToast(
+            short
+              ? `AI 分析失败（${short}），已用离线分层继续构建 3D`
+              : 'AI 分析失败，已用离线分层继续构建 3D',
+            'warning',
+          );
+        } else {
+          get().pushToast('已重新分层，开始构建 3D 模型', 'success');
+        }
+        get().build3D();
+        return;
+      }
+
       set({ view: 'workbench2d' });
       if (get().aiUsedFallback) {
-        get().pushToast('AI 模型不可用，已使用离线分层方案', 'warning');
+        const detail = get().aiError;
+        const short =
+          detail && detail.length > 72 ? `${detail.slice(0, 72)}…` : detail;
+        get().pushToast(
+          short
+            ? `AI 分析失败（${short}），已使用离线分层方案`
+            : 'AI 分析失败，已使用离线分层方案',
+          'warning',
+        );
       } else {
         get().pushToast('AI 语义分割与深度估算完成', 'success');
       }
     },
 
-    build3D: () => {
+    build3D: (opts) => {
+      if (opts?.resegmentFirst) {
+        if (!get().image) {
+          get().pushToast('请先上传图片', 'info');
+          return;
+        }
+        set({ pendingBuildAfterAnalysis: true });
+        get().analyze();
+        return;
+      }
+      if (isMeshyModel(get().config.aiModel)) {
+        void get().runMeshyBuild();
+        return;
+      }
+      get().setMeshyModelUrl(null);
       get().startTransition('build', 'workbench3d');
+    },
+
+    setMeshyModelUrl: (url) => set({ meshyModelUrl: url }),
+
+    runMeshyBuild: async () => {
+      const image = get().image;
+      if (!image?.url) {
+        get().pushToast('请先上传图片', 'info');
+        return;
+      }
+      set({
+        view: 'build',
+        transitionTo: null,
+        aiRunning: true,
+        aiStage: '正在提交 Meshy 任务…',
+        aiProgress: 0.02,
+        aiError: null,
+      });
+      try {
+        const { textureGen, textureQuality, pbr } = get().config;
+        const taskId = await createMeshyImageTo3d({
+          imageUrl: image.url,
+          enablePbr: pbr,
+          textureQuality: textureGen ? textureQuality : '2K',
+        });
+        set({ aiStage: 'Meshy 生成中…', aiProgress: 0.08 });
+        const { glbUrl } = await pollMeshyImageTo3d(taskId, (progress, status) => {
+          set({
+            aiStage: `Meshy · ${status}`,
+            aiProgress: Math.min(0.98, Math.max(0.08, progress / 100)),
+          });
+        });
+        set({
+          meshyModelUrl: glbUrl,
+          aiRunning: false,
+          aiProgress: 1,
+          aiStage: '完成',
+          view: 'workbench3d',
+          transitionTo: null,
+        });
+        get().pushToast('Meshy 三维模型已生成', 'success');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        set({
+          aiRunning: false,
+          aiError: message,
+          view: 'workbench2d',
+          transitionTo: null,
+        });
+        get().pushToast(message, 'error');
+      }
     },
 
     selectLayer: (id, additive = false) => {
@@ -528,12 +859,18 @@ export const useAppStore = create<AppState>((set, get) => {
     setLayerFilter: (f) => set({ layerFilter: f }),
 
     setProjectName: (name) => {
-      const next = name.trim() || '未命名景观方案';
+      if (isScratchProjectId(get().activeProjectId)) {
+        get().pushToast('未立项空间不可重命名，请先新立项', 'info');
+        return;
+      }
+      const next = name.trim() || defaultFormalProjectName();
       const id = get().activeProjectId;
       set({
         projectName: next,
-        projects: get().projects.map((p) =>
-          p.id === id ? { ...p, name: next, updatedAt: Date.now() } : p,
+        projects: ensureScratchMeta(
+          get().projects.map((p) =>
+            p.id === id ? { ...p, name: next, updatedAt: Date.now() } : p,
+          ),
         ),
       });
     },
@@ -542,8 +879,10 @@ export const useAppStore = create<AppState>((set, get) => {
       const id = get().activeProjectId;
       projectBags.set(id, captureBag());
       set({
-        projects: get().projects.map((p) =>
-          p.id === id ? { ...p, updatedAt: Date.now() } : p,
+        projects: ensureScratchMeta(
+          get().projects.map((p) =>
+            p.id === id ? { ...p, updatedAt: Date.now() } : p,
+          ),
         ),
       });
     },
@@ -553,68 +892,187 @@ export const useAppStore = create<AppState>((set, get) => {
       const target = get().projects.find((p) => p.id === id);
       if (!target) return;
 
-      // Persist current project (models + images stay scoped here)
       projectBags.set(get().activeProjectId, captureBag());
       set({
-        projects: get().projects.map((p) =>
-          p.id === get().activeProjectId
-            ? { ...p, name: get().projectName, updatedAt: Date.now() }
-            : p,
+        projects: ensureScratchMeta(
+          get().projects.map((p) =>
+            p.id === get().activeProjectId
+              ? { ...p, name: get().projectName, updatedAt: Date.now() }
+              : p,
+          ),
         ),
+        pendingPromote: null,
       });
 
-      const bag =
-        projectBags.get(id) ??
-        ({
-          model: emptyModelBag({
-            config: DEFAULT_CONFIG,
-            viewport: DEFAULT_VIEWPORT,
-            exportSettings: DEFAULT_EXPORT,
-            materialLibrary: MATERIAL_LIBRARY,
-          }),
-          image: emptyImageBag(),
-        } satisfies ProjectBag);
+      const bag = projectBags.get(id) ?? emptyBag();
       projectBags.set(id, bag);
 
-      set({ activeProjectId: id, projectName: target.name });
-      hydrateBag(bag, target.name);
-      get().pushToast(`已切换到「${target.name}」`, 'info');
+      const displayName = isScratchProjectId(id)
+        ? SCRATCH_PROJECT_NAME
+        : target.name;
+      set({ activeProjectId: id, projectName: displayName });
+      hydrateBag(bag, displayName);
+      get().pushToast(`已切换到「${displayName}」`, 'info');
     },
 
-    createProject: (name) => {
-      projectBags.set(get().activeProjectId, captureBag());
-      set({
-        projects: get().projects.map((p) =>
-          p.id === get().activeProjectId
-            ? { ...p, name: get().projectName, updatedAt: Date.now() }
-            : p,
-        ),
-      });
+    promoteCurrentToProject: (name, opts) => {
+      const fromScratch = isScratchProjectId(get().activeProjectId);
+      const projectName = (
+        name?.trim() || defaultFormalProjectName()
+      ).trim();
+      if (!projectName) return null;
+
+      const retainOthers =
+        fromScratch && Boolean(opts?.retainOtherImageAlbumsInScratch);
+
+      // Snapshot current work twice so bags don't share the same object.
+      const workA = captureBag();
+      projectBags.set(get().activeProjectId, workA);
+      let workB = captureBag();
+
+      if (retainOthers) {
+        const { projectImage, scratchImage } =
+          splitImageBagForTo3dPromote(workB.image);
+        workB = { ...workB, image: projectImage };
+        projectBags.set(SCRATCH_PROJECT_ID, {
+          ...emptyBag(),
+          image: scratchImage,
+        });
+      }
 
       const id = newProjectId();
-      const n = get().projects.length + 1;
-      const projectName = (name?.trim() || `未命名景观方案 ${n}`).trim();
-      const bag: ProjectBag = {
-        model: emptyModelBag({
-          config: DEFAULT_CONFIG,
-          viewport: DEFAULT_VIEWPORT,
-          exportSettings: DEFAULT_EXPORT,
-          materialLibrary: MATERIAL_LIBRARY,
-        }),
-        image: emptyImageBag(),
-      };
-      projectBags.set(id, bag);
+      projectBags.set(id, workB);
+
+      if (fromScratch && !retainOthers) {
+        projectBags.set(SCRATCH_PROJECT_ID, emptyBag());
+      }
+
+      const prevMeta = get().projects.map((p) =>
+        p.id === get().activeProjectId
+          ? {
+              ...p,
+              name: fromScratch
+                ? SCRATCH_PROJECT_NAME
+                : get().projectName,
+              updatedAt: Date.now(),
+              kind: fromScratch ? ('scratch' as const) : (p.kind ?? 'project'),
+            }
+          : p,
+      );
 
       set({
-        projects: [
-          ...get().projects,
-          { id, name: projectName, updatedAt: Date.now() },
-        ],
+        projects: ensureScratchMeta([
+          ...prevMeta,
+          {
+            id,
+            name: projectName,
+            updatedAt: Date.now(),
+            kind: 'project',
+          },
+        ]),
         activeProjectId: id,
         projectName,
       });
-      hydrateBag(bag, projectName);
-      get().pushToast(`已新建「${projectName}」`, 'success');
+      hydrateBag(workB, projectName);
+      const kept =
+        retainOthers &&
+        (projectBags.get(SCRATCH_PROJECT_ID)?.image.sourceAlbums?.length ?? 0);
+      get().pushToast(
+        fromScratch
+          ? kept
+            ? `已立项「${projectName}」，其余 ${kept} 张原图仍在未立项空间`
+            : `已立项「${projectName}」`
+          : `已另存副本「${projectName}」`,
+        'success',
+      );
+      return id;
+    },
+
+    createProject: (name) => {
+      get().promoteCurrentToProject(name);
+    },
+
+    createBlankProject: (name) => {
+      const projectName = (
+        name?.trim() || defaultFormalProjectName()
+      ).trim();
+      if (!projectName) return null;
+
+      const activeId = get().activeProjectId;
+      projectBags.set(activeId, captureBag());
+
+      const id = newProjectId();
+      const blank = emptyBag();
+      projectBags.set(id, blank);
+
+      const prevMeta = get().projects.map((p) =>
+        p.id === activeId
+          ? {
+              ...p,
+              name: isScratchProjectId(activeId)
+                ? SCRATCH_PROJECT_NAME
+                : get().projectName,
+              updatedAt: Date.now(),
+            }
+          : p,
+      );
+
+      set({
+        projects: ensureScratchMeta([
+          ...prevMeta,
+          {
+            id,
+            name: projectName,
+            updatedAt: Date.now(),
+            kind: 'project',
+          },
+        ]),
+        activeProjectId: id,
+        projectName,
+        pendingPromote: null,
+      });
+      hydrateBag(blank, projectName);
+      get().pushToast(`已创建空白项目「${projectName}」`, 'success');
+      return id;
+    },
+
+    removeProject: (id) => {
+      if (isScratchProjectId(id)) {
+        get().pushToast('未立项空间不可删除', 'info');
+        return false;
+      }
+      const target = get().projects.find((p) => p.id === id);
+      if (!target) return false;
+
+      const wasActive = get().activeProjectId === id;
+      if (wasActive) {
+        // Persist nothing into deleted bag; switch away first conceptually.
+        projectBags.set(SCRATCH_PROJECT_ID, projectBags.get(SCRATCH_PROJECT_ID) ?? emptyBag());
+      } else {
+        projectBags.set(get().activeProjectId, captureBag());
+      }
+
+      projectBags.delete(id);
+      const nextProjects = ensureScratchMeta(
+        get().projects.filter((p) => p.id !== id),
+      );
+
+      if (wasActive) {
+        const scratchBag = projectBags.get(SCRATCH_PROJECT_ID) ?? emptyBag();
+        projectBags.set(SCRATCH_PROJECT_ID, scratchBag);
+        set({
+          projects: nextProjects,
+          activeProjectId: SCRATCH_PROJECT_ID,
+          projectName: SCRATCH_PROJECT_NAME,
+          pendingPromote: null,
+        });
+        hydrateBag(scratchBag, SCRATCH_PROJECT_NAME);
+      } else {
+        set({ projects: nextProjects });
+      }
+
+      get().pushToast(`已删除「${target.name}」`, 'info');
+      return true;
     },
 
     addLayer: (name, dimension) => {
@@ -634,7 +1092,7 @@ export const useAppStore = create<AppState>((set, get) => {
         height: dimension === '3D' ? 0.9 : 0.06,
         kind: 'generic',
         material: newLayerMaterial('自定义材质'),
-        topology: 'quad',
+        topology: get().config.topology ?? 'triangle',
         transform: { x: 0, y: 0, z: 0, scale: 1, rx: 0, ry: 0, rz: 0 },
       };
       // stamp a central block into the grid
@@ -1069,9 +1527,13 @@ export const useAppStore = create<AppState>((set, get) => {
     removeSnapshot: (id) => {
       const next = get().snapshots.filter((s) => s.id !== id);
       const viewing = get().viewingSnapshotId;
+      const session = get().imageSessionSnapshotIds;
       set({
         snapshots: next,
         viewingSnapshotId: viewing === id ? null : viewing,
+        imageSessionSnapshotIds: session
+          ? session.filter((x) => x !== id)
+          : null,
       });
       get().pushToast('已删除快照', 'info');
     },
@@ -1197,7 +1659,13 @@ export const useAppStore = create<AppState>((set, get) => {
       get().pushToast(`已复制「${src.name}」`, 'success');
     },
 
-    setConfig: (patch) => set({ config: { ...get().config, ...patch } }),
+    setConfig: (patch) => {
+      const next = { ...get().config, ...patch };
+      if (patch.aiModel !== undefined) {
+        next.aiModel = resolveAiModel(patch.aiModel);
+      }
+      set({ config: next });
+    },
     setViewport: (patch) => set({ viewport: { ...get().viewport, ...patch } }),
     setExportSettings: (patch) =>
       set({ exportSettings: { ...get().exportSettings, ...patch } }),

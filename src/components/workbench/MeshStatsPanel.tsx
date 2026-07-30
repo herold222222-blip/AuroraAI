@@ -17,7 +17,7 @@ export function MeshStatsPanel() {
     }
 
     const visible = layers.filter((l) => l.visible && l.kind !== 'sky');
-    const topoSet = new Set(visible.map((l) => l.topology ?? 'quad'));
+    const topoSet = new Set(visible.map((l) => l.topology ?? 'triangle'));
     let topology = '混合';
     if (topoSet.size === 1) {
       topology = topoSet.has('triangle') ? '三角面' : '四边面';

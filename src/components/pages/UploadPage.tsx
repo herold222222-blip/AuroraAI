@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
+import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 
 const EXAMPLES = [
   { src: '/examples/example-1.jpg', name: '山谷溪流景观' },
@@ -16,6 +17,7 @@ export function UploadPage() {
   const setImage = useAppStore((s) => s.setImage);
   const analyze = useAppStore((s) => s.analyze);
   const pushToast = useAppStore((s) => s.pushToast);
+  const openDownloadMenu = useImageDownloadMenu();
 
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -92,7 +94,13 @@ export function UploadPage() {
           />
           {image ? (
             <div className="upload-preview">
-              <img src={image.url} alt={image.name} />
+              <img
+                src={image.url}
+                alt={image.name}
+                onContextMenu={(e) =>
+                  openDownloadMenu(e, image.url, image.name || 'aurora-upload')
+                }
+              />
               <div className="upload-preview-info">
                 <span className="fname">{image.name}</span>
                 <button

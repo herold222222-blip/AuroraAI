@@ -12,10 +12,27 @@ import type {
 
 export type ProjectLayerFilter = 'all' | '2D' | '3D' | 'hidden';
 
+/** Permanent scratch workspace — always exists, cannot be renamed/deleted. */
+export const SCRATCH_PROJECT_ID = 'proj_scratch_unassigned';
+export const SCRATCH_PROJECT_NAME = '未立项空间';
+
 export interface ProjectMeta {
   id: string;
   name: string;
   updatedAt: number;
+  kind?: 'scratch' | 'project';
+}
+
+export function isScratchProjectId(id: string) {
+  return id === SCRATCH_PROJECT_ID;
+}
+
+export function defaultFormalProjectName() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `景观方案 ${y}-${m}-${day}`;
 }
 
 export interface ModelProjectBag {
@@ -37,6 +54,10 @@ export interface ModelProjectBag {
   cameraMode: boolean;
   snapshots: ModelSnapshot[];
   viewingSnapshotId: string | null;
+  /** Snapshot ids sent to the image editor (order preserved); null = show all. */
+  imageSessionSnapshotIds: string[] | null;
+  /** Meshy Image-to-3D result GLB URL */
+  meshyModelUrl: string | null;
 }
 
 export interface ImageProjectBag {
@@ -56,8 +77,27 @@ export interface ImageProjectBag {
     label: string;
     createdAt: number;
     sourceSnapshotId?: string;
+    prompt?: string;
   }[];
+  sourceAlbums?: {
+    id: string;
+    url: string;
+    label: string;
+    createdAt: number;
+    sourceSnapshotId?: string;
+    results: {
+      id: string;
+      url: string;
+      label: string;
+      createdAt: number;
+      sourceSnapshotId?: string;
+      prompt?: string;
+    }[];
+  }[];
+  activeSourceId?: string | null;
+  sourceSidebarMode?: 'list' | 'detail';
   sidebarTab: 'snapshots' | 'saved';
+  lastGeneratePrompt?: string | null;
   past: { url: string }[];
   future: { url: string }[];
 }
@@ -81,12 +121,71 @@ export function emptyImageBag(): ImageProjectBag {
     retouchTool: 'select',
     brushSize: 28,
     prompt: '',
+    lastGeneratePrompt: null,
     materials: [],
     savedImages: [],
+    sourceAlbums: [],
+    activeSourceId: null,
+    sourceSidebarMode: 'list',
     sidebarTab: 'snapshots',
     past: [],
     future: [],
   };
+}
+
+function cloneAlbum(
+  a: NonNullable<ImageProjectBag['sourceAlbums']>[number],
+): NonNullable<ImageProjectBag['sourceAlbums']>[number] {
+  return {
+    ...a,
+    results: (a.results || []).map((r) => ({ ...r })),
+  };
+}
+
+/**
+ * When promoting scratch → formal for 图生模型: take only the active/current
+ * album into the new project; leave other originals in 未立项空间.
+ */
+export function splitImageBagForTo3dPromote(image: ImageProjectBag): {
+  projectImage: ImageProjectBag;
+  scratchImage: ImageProjectBag;
+} {
+  const albums = (image.sourceAlbums ?? []).map(cloneAlbum);
+  if (albums.length <= 1) {
+    return { projectImage: image, scratchImage: emptyImageBag() };
+  }
+
+  const activeId =
+    image.activeSourceId ??
+    albums.find(
+      (a) => a.url === image.originalUrl || a.url === image.currentUrl,
+    )?.id ??
+    null;
+
+  const taken =
+    (activeId ? albums.find((a) => a.id === activeId) : null) ?? albums[0];
+  const remaining = albums.filter((a) => a.id !== taken.id);
+  if (!remaining.length) {
+    return { projectImage: image, scratchImage: emptyImageBag() };
+  }
+
+  const projectImage: ImageProjectBag = {
+    ...image,
+    sourceAlbums: [cloneAlbum(taken)],
+    activeSourceId: taken.id,
+    sourceSidebarMode: 'detail',
+    savedImages: (taken.results || []).map((r) => ({ ...r })),
+    sourceSnapshotId: taken.sourceSnapshotId ?? image.sourceSnapshotId,
+  };
+
+  const scratchImage: ImageProjectBag = {
+    ...emptyImageBag(),
+    sourceAlbums: remaining.map(cloneAlbum),
+    activeSourceId: null,
+    sourceSidebarMode: 'list',
+  };
+
+  return { projectImage, scratchImage };
 }
 
 export function emptyModelBag(defaults: {
@@ -114,6 +213,8 @@ export function emptyModelBag(defaults: {
     cameraMode: false,
     snapshots: [],
     viewingSnapshotId: null,
+    imageSessionSnapshotIds: null,
+    meshyModelUrl: null,
   };
 }
 

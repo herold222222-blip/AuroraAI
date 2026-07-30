@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { useAppStore } from '../../store/useAppStore';
 import type { EditTool, Layer, SurfaceMode, ViewportSettings } from '../../types';
 import { viewportController, type CameraView } from './viewportController';
@@ -118,6 +119,7 @@ export function Viewport3D() {
   const controlsRef = useRef<OrbitControls | undefined>(undefined);
   const rendererRef = useRef<THREE.WebGLRenderer | undefined>(undefined);
   const groupRef = useRef<THREE.Group | undefined>(undefined);
+  const meshyGroupRef = useRef<THREE.Group | undefined>(undefined);
   const gridRef = useRef<THREE.GridHelper | undefined>(undefined);
   const hemiRef = useRef<THREE.HemisphereLight | undefined>(undefined);
   const fillRef = useRef<THREE.DirectionalLight | undefined>(undefined);
@@ -134,6 +136,7 @@ export function Viewport3D() {
   const selectedIds = useAppStore((s) => s.selectedLayerIds);
   const selectLayer = useAppStore((s) => s.selectLayer);
   const faceQuality = useAppStore((s) => s.config.faceQuality);
+  const meshyModelUrl = useAppStore((s) => s.meshyModelUrl);
   const materialTool = useAppStore((s) => s.materialTool);
   const sampleMaterialFromLayer = useAppStore((s) => s.sampleMaterialFromLayer);
   const applyPaintToLayer = useAppStore((s) => s.applyPaintToLayer);
@@ -229,6 +232,10 @@ export function Viewport3D() {
     const group = new THREE.Group();
     scene.add(group);
     groupRef.current = group;
+
+    const meshyGroup = new THREE.Group();
+    scene.add(meshyGroup);
+    meshyGroupRef.current = meshyGroup;
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
@@ -607,7 +614,51 @@ export function Viewport3D() {
       syncMoveBall();
       renderer.render(scene, camera);
       try {
-        return renderer.domElement.toDataURL('image/png');
+        const canvas = renderer.domElement;
+        const frame = document.querySelector(
+          '[data-snapshot-frame]',
+        ) as HTMLElement | null;
+        if (!frame) {
+          return canvas.toDataURL('image/png');
+        }
+        const fr = frame.getBoundingClientRect();
+        const cr = canvas.getBoundingClientRect();
+        if (fr.width < 2 || fr.height < 2 || cr.width < 2 || cr.height < 2) {
+          return canvas.toDataURL('image/png');
+        }
+        // Intersect frame with canvas (frame is full-width; may extend past top/bottom).
+        const left = Math.max(fr.left, cr.left);
+        const top = Math.max(fr.top, cr.top);
+        const right = Math.min(fr.right, cr.right);
+        const bottom = Math.min(fr.bottom, cr.bottom);
+        const cssW = right - left;
+        const cssH = bottom - top;
+        if (cssW < 2 || cssH < 2) {
+          return canvas.toDataURL('image/png');
+        }
+        const scaleX = canvas.width / cr.width;
+        const scaleY = canvas.height / cr.height;
+        const sx = (left - cr.left) * scaleX;
+        const sy = (top - cr.top) * scaleY;
+        const sw = cssW * scaleX;
+        const sh = cssH * scaleY;
+        const out = document.createElement('canvas');
+        out.width = Math.round(sw);
+        out.height = Math.round(sh);
+        const ctx = out.getContext('2d');
+        if (!ctx) return canvas.toDataURL('image/png');
+        ctx.drawImage(
+          canvas,
+          Math.round(sx),
+          Math.round(sy),
+          Math.round(sw),
+          Math.round(sh),
+          0,
+          0,
+          out.width,
+          out.height,
+        );
+        return out.toDataURL('image/png');
       } catch {
         return null;
       }
@@ -663,6 +714,13 @@ export function Viewport3D() {
       });
     }
 
+    // Meshy GLB takes over the viewport massing.
+    if (meshyModelUrl) {
+      group.visible = false;
+      return;
+    }
+    group.visible = true;
+
     const selectedSet = new Set(
       selectedIds.length ? selectedIds : selectedId ? [selectedId] : [],
     );
@@ -698,7 +756,106 @@ export function Viewport3D() {
       pivot.add(mesh);
       group.add(pivot);
     }
-  }, [grid, layers, viewport, selectedId, selectedIds, faceQuality]);
+  }, [grid, layers, viewport, selectedId, selectedIds, faceQuality, meshyModelUrl]);
+
+  useEffect(() => {
+    const meshyGroup = meshyGroupRef.current;
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!meshyGroup) return;
+
+    while (meshyGroup.children.length) {
+      const child = meshyGroup.children[0];
+      meshyGroup.remove(child);
+      child.traverse((obj) => {
+        const mesh = obj as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry?.dispose();
+        const m = mesh.material;
+        if (Array.isArray(m)) m.forEach((x) => x.dispose());
+        else (m as THREE.Material)?.dispose();
+      });
+    }
+
+    if (!meshyModelUrl) {
+      meshyGroup.visible = false;
+      return;
+    }
+
+    let cancelled = false;
+    const loader = new GLTFLoader();
+    const src =
+      meshyModelUrl.startsWith('blob:') ||
+      meshyModelUrl.startsWith('data:') ||
+      meshyModelUrl.startsWith('/')
+        ? meshyModelUrl
+        : `/api/meshy/asset?url=${encodeURIComponent(meshyModelUrl)}`;
+
+    loader.load(
+      src,
+      (gltf) => {
+        if (cancelled) return;
+        const root = gltf.scene;
+        root.updateMatrixWorld(true);
+        root.traverse((obj) => {
+          const mesh = obj as THREE.Mesh;
+          if (mesh.isMesh) {
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+          }
+        });
+
+        // Fit into a unit box then place on the ground plane.
+        const box0 = new THREE.Box3().setFromObject(root);
+        if (box0.isEmpty()) {
+          useAppStore.getState().pushToast('Meshy 模型几何为空', 'error');
+          useAppStore.getState().setMeshyModelUrl(null);
+          return;
+        }
+        const size0 = box0.getSize(new THREE.Vector3());
+        const maxDim = Math.max(size0.x, size0.y, size0.z, 0.001);
+        const scale = 10 / maxDim;
+        root.scale.setScalar(scale);
+        root.updateMatrixWorld(true);
+
+        const box = new THREE.Box3().setFromObject(root);
+        const center = box.getCenter(new THREE.Vector3());
+        root.position.x += -center.x;
+        root.position.y += -box.min.y;
+        root.position.z += -center.z;
+
+        meshyGroup.add(root);
+        meshyGroup.visible = true;
+
+        if (camera && controls) {
+          const fitted = new THREE.Box3().setFromObject(meshyGroup);
+          const fitSize = fitted.getSize(new THREE.Vector3());
+          const fitCenter = fitted.getCenter(new THREE.Vector3());
+          const dist = Math.max(fitSize.x, fitSize.y, fitSize.z, 1) * 1.8;
+          camera.position.set(
+            fitCenter.x + dist * 0.75,
+            fitCenter.y + dist * 0.55,
+            fitCenter.z + dist * 0.9,
+          );
+          controls.target.copy(fitCenter);
+          controls.update();
+        }
+        useAppStore.getState().pushToast('Meshy 模型已载入视口', 'success');
+      },
+      undefined,
+      (err) => {
+        console.error('[Meshy GLB]', err);
+        useAppStore
+          .getState()
+          .pushToast('Meshy 模型加载失败（已恢复本地分层预览）', 'error');
+        useAppStore.getState().setMeshyModelUrl(null);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [meshyModelUrl]);
 
   useEffect(() => {
     if (gridRef.current) gridRef.current.visible = viewport.grid;

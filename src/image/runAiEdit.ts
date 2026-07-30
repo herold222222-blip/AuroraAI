@@ -47,7 +47,11 @@ export async function runAiEdit(opts: {
   isolated?: boolean;
 }): Promise<string> {
   const state = useImageStore.getState();
-  const current = opts.imageUrl ?? state.currentUrl;
+  const working =
+    opts.imageUrl ??
+    (await state.getWorkingImageUrl()) ??
+    state.currentUrl;
+  const current = working;
   if (!current) throw new Error('没有可编辑的图片');
 
   const pad = await padToSupportedRatio(current);
@@ -82,6 +86,13 @@ export async function runAiEdit(opts: {
     maskDataUrl = await padMaskToCanvas(naturalMaskUrl, pad);
     mode = 'mask';
     local = true;
+  } else if (
+    !opts.forceGlobal &&
+    !opts.isolated &&
+    state.brushRegions.length > 1
+  ) {
+    // Never silently fall through to global edit when multiple brush regions exist.
+    throw new Error('存在多个涂抹区域，请在各区域填写要求后点「应用」');
   } else if (!opts.forceGlobal && activeHotspot) {
     // Hotspot: send ROI mask + focus point so iterative edits stay locked to the click.
     // Soft alpha is still used client-side for seamless composite.

@@ -132,4 +132,6 @@ export interface ModelSnapshot {
   url: string;
   createdAt: number;
   label: string;
+  /** Seeded from image→3D handoff; kept as the first snapshot. */
+  fromSourceImage?: boolean;
 }

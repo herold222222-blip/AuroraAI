@@ -9,6 +9,8 @@ import {
 import { createPortal } from 'react-dom';
 import { useImageStore } from '../../image/useImageStore';
 import { useAppStore } from '../../store/useAppStore';
+import { useImageDownloadMenu } from '../common/ImageDownloadContext';
+import { ConfirmDialog } from '../common/ConfirmDialog';
 
 const MAX_REFS = 5;
 
@@ -211,6 +213,8 @@ export function RefImageLightbox({
   label: string;
   onClose: () => void;
 }) {
+  const openDownloadMenu = useImageDownloadMenu();
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -241,7 +245,12 @@ export function RefImageLightbox({
             ✕
           </button>
         </div>
-        <img src={url} alt={label} className="img-ref-lightbox-img" />
+        <img
+          src={url}
+          alt={label}
+          className="img-ref-lightbox-img"
+          onContextMenu={(e) => openDownloadMenu(e, url, label)}
+        />
       </div>
     </div>,
     document.body,
@@ -255,6 +264,7 @@ export function PromptRefThumbs({ disabled }: { disabled?: boolean }) {
   const [preview, setPreview] = useState<{ url: string; label: string } | null>(
     null,
   );
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
   if (!materials.length) return null;
 
@@ -277,7 +287,7 @@ export function PromptRefThumbs({ disabled }: { disabled?: boolean }) {
               className="img-prompt-ref-del"
               title="移除"
               disabled={disabled}
-              onClick={() => removeMaterial(m.id)}
+              onClick={() => setConfirmRemoveId(m.id)}
             >
               ×
             </button>
@@ -289,6 +299,17 @@ export function PromptRefThumbs({ disabled }: { disabled?: boolean }) {
           url={preview.url}
           label={preview.label}
           onClose={() => setPreview(null)}
+        />
+      )}
+      {confirmRemoveId && (
+        <ConfirmDialog
+          message="确定移除该参考图？"
+          confirmLabel="移除"
+          onCancel={() => setConfirmRemoveId(null)}
+          onConfirm={() => {
+            removeMaterial(confirmRemoveId);
+            setConfirmRemoveId(null);
+          }}
         />
       )}
     </>

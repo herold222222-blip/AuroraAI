@@ -4,6 +4,7 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type SyntheticEvent,
   type CSSProperties,
 } from 'react';
@@ -14,11 +15,15 @@ import ReactCrop, {
 } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { useImageStore } from '../../image/useImageStore';
+import { useAppStore } from '../../store/useAppStore';
 import {
   findBrushRegionAt,
   mergeStrokeIntoRegions,
   redrawBrushOverlay,
 } from '../../image/brushStrokeMerge';
+import { ImageOverlayLayer } from './ImageOverlayLayer';
+import { ImageRegenerateBar } from './ImageRegenerateBar';
+import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 
 function initCrop(
   width: number,
@@ -37,6 +42,16 @@ function initCrop(
     width,
     height,
   );
+}
+
+/** Copy stroke pixels before async merge so later paints / canvas resets cannot wipe them. */
+function snapshotCanvas(source: HTMLCanvasElement): HTMLCanvasElement | null {
+  if (!source.width || !source.height) return null;
+  const snap = document.createElement('canvas');
+  snap.width = source.width;
+  snap.height = source.height;
+  snap.getContext('2d')!.drawImage(source, 0, 0);
+  return snap;
 }
 
 export function ImageCanvasStage() {
@@ -60,6 +75,8 @@ export function ImageCanvasStage() {
   const cropAspect = useImageStore((s) => s.cropAspect);
   const cropSelection = useImageStore((s) => s.cropSelection);
   const setCropSelection = useImageStore((s) => s.setCropSelection);
+  const openDownloadMenu = useImageDownloadMenu();
+  const pushToast = useAppStore((s) => s.pushToast);
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
@@ -71,18 +88,18 @@ export function ImageCanvasStage() {
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [viewScale, setViewScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  /** Natural size after decode — gates point/brush so coords never use naturalWidth=0. */
+  /** Natural size after decode — gates markers; brush uses naturalWidth directly. */
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(
     null,
   );
   const painting = useRef(false);
   const strokeDirty = useRef(false);
+  const mergeQueue = useRef(Promise.resolve());
   const panning = useRef(false);
   const panLast = useRef({ x: 0, y: 0 });
 
   const markImageReady = useCallback((img: HTMLImageElement | null) => {
     if (!img || !img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
-      setImageSize(null);
       return;
     }
     setImageSize({ w: img.naturalWidth, h: img.naturalHeight });
@@ -96,7 +113,24 @@ export function ImageCanvasStage() {
     if (stroke) {
       stroke.getContext('2d')!.clearRect(0, 0, stroke.width, stroke.height);
     }
-  }, [currentUrl]);
+    // Cached images may skip onLoad; poll readiness after URL swap.
+    let cancelled = false;
+    let attempts = 0;
+    const tryReady = () => {
+      if (cancelled) return;
+      const img = imgRef.current;
+      if (img?.complete && img.naturalWidth > 0) {
+        markImageReady(img);
+        return;
+      }
+      if (++attempts > 180) return;
+      requestAnimationFrame(tryReady);
+    };
+    requestAnimationFrame(tryReady);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUrl, markImageReady]);
 
   const resetView = useCallback(() => {
     setViewScale(1);
@@ -106,22 +140,45 @@ export function ImageCanvasStage() {
   const viewAltered =
     viewScale > 1.02 || Math.abs(pan.x) > 1 || Math.abs(pan.y) > 1;
 
-  const syncCanvasSize = useCallback((canvas: HTMLCanvasElement | null) => {
-    const img = imgRef.current;
-    if (!img || !canvas) return false;
-    const w = img.clientWidth;
-    const h = img.clientHeight;
-    if (canvas.width === w && canvas.height === h) return false;
-    canvas.width = w;
-    canvas.height = h;
-    return true;
-  }, []);
+  const syncCanvasSize = useCallback(
+    (
+      canvas: HTMLCanvasElement | null,
+      opts?: { preserve?: boolean },
+    ): boolean => {
+      const img = imgRef.current;
+      if (!img || !canvas) return false;
+      const w = Math.max(1, Math.round(img.clientWidth));
+      const h = Math.max(1, Math.round(img.clientHeight));
+      if (canvas.width === w && canvas.height === h) return false;
+      let backup: HTMLCanvasElement | null = null;
+      if (
+        opts?.preserve &&
+        canvas.width > 0 &&
+        canvas.height > 0 &&
+        strokeDirty.current
+      ) {
+        backup = snapshotCanvas(canvas);
+      }
+      canvas.width = w;
+      canvas.height = h;
+      if (backup) {
+        canvas.getContext('2d')!.drawImage(backup, 0, 0, w, h);
+      }
+      return true;
+    },
+    [],
+  );
 
   const refreshOverlay = useCallback(async () => {
     const mask = maskRef.current;
     if (!mask) return;
     syncCanvasSize(mask);
-    syncCanvasSize(strokeRef.current);
+    // Never wipe an in-progress / pending stroke via bare canvas resize.
+    if (painting.current || strokeDirty.current) {
+      syncCanvasSize(strokeRef.current, { preserve: true });
+    } else {
+      syncCanvasSize(strokeRef.current);
+    }
     const regions = useImageStore.getState().brushRegions;
     await redrawBrushOverlay(mask, regions);
   }, [syncCanvasSize]);
@@ -267,15 +324,17 @@ export function ImageCanvasStage() {
     setCropSelection(initCrop(img.width, img.height, cropAspect));
   }, [cropAspect, tab, currentUrl, setCropSelection]);
 
-  const toImageCoords = (e: MouseEvent) => {
+  const toImageCoords = (clientX: number, clientY: number) => {
     const img = imgRef.current;
     if (!img || !img.complete || img.naturalWidth <= 0 || img.naturalHeight <= 0) {
       return null;
     }
     const rect = img.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
     // Visual rect accounts for CSS zoom/pan; map back to layout/canvas space
-    const nx = (e.clientX - rect.left) / Math.max(1, rect.width);
-    const ny = (e.clientY - rect.top) / Math.max(1, rect.height);
+    const nx = (clientX - rect.left) / rect.width;
+    const ny = (clientY - rect.top) / rect.height;
+    if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return null;
     const natW = img.naturalWidth;
     const natH = img.naturalHeight;
     return {
@@ -291,17 +350,17 @@ export function ImageCanvasStage() {
     const img = imgRef.current;
     // Wait until the current (possibly post-edit) image has real natural size.
     if (!stroke || !img || !img.complete || img.naturalWidth <= 0) return;
-    syncCanvasSize(stroke);
+    syncCanvasSize(stroke, { preserve: strokeDirty.current });
     const ctx = stroke.getContext('2d')!;
     ctx.fillStyle = 'rgba(239, 68, 68, 0.6)';
     ctx.beginPath();
-    ctx.arc(lx, ly, brushSize / 2, 0, Math.PI * 2);
+    ctx.arc(lx, ly, Math.max(1, brushSize / 2), 0, Math.PI * 2);
     ctx.fill();
     strokeDirty.current = true;
     clearHotspots();
   };
 
-  const finalizeStroke = useCallback(async () => {
+  const finalizeStroke = useCallback(() => {
     const stroke = strokeRef.current;
     const img = imgRef.current;
     if (
@@ -314,26 +373,39 @@ export function ImageCanvasStage() {
       strokeDirty.current = false;
       return;
     }
+    // Snapshot + clear synchronously so async merge cannot race with the next stroke.
+    const snap = snapshotCanvas(stroke);
     strokeDirty.current = false;
-    const existing = useImageStore.getState().brushRegions;
-    const next = await mergeStrokeIntoRegions(
-      stroke,
-      existing,
-      img.naturalWidth,
-      img.naturalHeight,
-    );
     stroke.getContext('2d')!.clearRect(0, 0, stroke.width, stroke.height);
-    setBrushRegions(next);
-  }, [setBrushRegions]);
+    if (!snap) return;
+
+    const natW = img.naturalWidth;
+    const natH = img.naturalHeight;
+
+    mergeQueue.current = mergeQueue.current
+      .then(async () => {
+        const existing = useImageStore.getState().brushRegions;
+        const next = await mergeStrokeIntoRegions(snap, existing, natW, natH);
+        setBrushRegions(next);
+      })
+      .catch((err) => {
+        console.error('[Aurora] brush stroke merge failed', err);
+        pushToast('涂抹区域保存失败，请再试一次', 'error');
+      });
+  }, [pushToast, setBrushRegions]);
 
   useEffect(() => {
     const up = () => {
       if (!painting.current) return;
       painting.current = false;
-      void finalizeStroke();
+      finalizeStroke();
     };
-    window.addEventListener('mouseup', up);
-    return () => window.removeEventListener('mouseup', up);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    return () => {
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+    };
   }, [finalizeStroke]);
 
   const onCropImageLoad = (e: SyntheticEvent<HTMLImageElement>) => {
@@ -347,7 +419,7 @@ export function ImageCanvasStage() {
   const onPointClick = (e: MouseEvent) => {
     if (tab !== 'retouch' || retouchTool !== 'point') return;
     if (showCompare) setShowCompare(false);
-    const p = toImageCoords(e);
+    const p = toImageCoords(e.clientX, e.clientY);
     if (!p) return;
     const img = imgRef.current;
     const hitRadius = img
@@ -368,12 +440,12 @@ export function ImageCanvasStage() {
     setHasMask(false);
   };
 
-  const onBrushMouseDown = (e: MouseEvent) => {
+  const onBrushPointerDown = (e: ReactPointerEvent<HTMLImageElement>) => {
     if (tab !== 'retouch' || retouchTool !== 'brush') return;
+    if (e.button !== 0) return;
     e.preventDefault();
     if (showCompare) setShowCompare(false);
-    if (!imageSize) return;
-    const p = toImageCoords(e);
+    const p = toImageCoords(e.clientX, e.clientY);
     if (!p) return;
     if (e.shiftKey) {
       const img = imgRef.current;
@@ -391,7 +463,37 @@ export function ImageCanvasStage() {
       return;
     }
     painting.current = true;
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
     paintStrokeAt(p.lx, p.ly);
+  };
+
+  const onBrushPointerMove = (e: ReactPointerEvent<HTMLImageElement>) => {
+    if (tab !== 'retouch' || retouchTool !== 'brush') {
+      setCursor(null);
+      return;
+    }
+    const p = toImageCoords(e.clientX, e.clientY);
+    if (!p) {
+      setCursor(null);
+      return;
+    }
+    setCursor({ x: p.lx, y: p.ly });
+    if (painting.current) paintStrokeAt(p.lx, p.ly);
+  };
+
+  const onBrushPointerUp = (e: ReactPointerEvent<HTMLImageElement>) => {
+    if (!painting.current) return;
+    painting.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    finalizeStroke();
   };
 
   const mainImage = (
@@ -403,26 +505,20 @@ export function ImageCanvasStage() {
       className="img-main"
       crossOrigin="anonymous"
       draggable={false}
+      onContextMenu={(e) =>
+        currentUrl && openDownloadMenu(e, currentUrl, 'aurora-edit')
+      }
       onLoad={(e) => {
         markImageReady(e.currentTarget);
         void refreshOverlay();
       }}
       onClick={tab === 'retouch' && retouchTool === 'point' ? onPointClick : undefined}
-      onMouseDown={onBrushMouseDown}
-      onMouseMove={(e) => {
-        if (tab === 'retouch' && retouchTool === 'brush') {
-          const p = toImageCoords(e);
-          if (!p) return;
-          setCursor({ x: p.lx, y: p.ly });
-          if (painting.current) {
-            paintStrokeAt(p.lx, p.ly);
-          }
-        } else {
-          setCursor(null);
-        }
-      }}
-      onMouseLeave={() => {
-        setCursor(null);
+      onPointerDown={onBrushPointerDown}
+      onPointerMove={onBrushPointerMove}
+      onPointerUp={onBrushPointerUp}
+      onPointerCancel={onBrushPointerUp}
+      onPointerLeave={() => {
+        if (!painting.current) setCursor(null);
       }}
     />
   );
@@ -442,6 +538,7 @@ export function ImageCanvasStage() {
           还原
         </button>
       )}
+      <div className="img-stage-stack">
       <div
         className="img-stage-frame"
         style={{
@@ -449,7 +546,11 @@ export function ImageCanvasStage() {
           transformOrigin: 'center center',
         }}
       >
-        <div className={`img-stage-media${tab === 'crop' ? ' is-cropping' : ''}`}>
+        <div
+          className={`img-stage-media${tab === 'crop' ? ' is-cropping' : ''}${
+            tab === 'retouch' && retouchTool === 'brush' ? ' is-brushing' : ''
+          }`}
+        >
           {comparing ? (
             <div
               className="img-compare"
@@ -464,6 +565,9 @@ export function ImageCanvasStage() {
                 src={currentUrl}
                 alt="after"
                 className="img-main img-compare-after"
+                onContextMenu={(e) =>
+                  currentUrl && openDownloadMenu(e, currentUrl, 'aurora-after')
+                }
               />
               <div
                 className="img-compare-before"
@@ -474,6 +578,10 @@ export function ImageCanvasStage() {
                   alt="before"
                   className="img-compare-before-img"
                   style={compareW ? { width: compareW } : undefined}
+                  onContextMenu={(e) =>
+                    compareBeforeUrl &&
+                    openDownloadMenu(e, compareBeforeUrl, 'aurora-before')
+                  }
                 />
               </div>
               <div
@@ -520,11 +628,15 @@ export function ImageCanvasStage() {
                 crossOrigin="anonymous"
                 draggable={false}
                 onLoad={onCropImageLoad}
+                onContextMenu={(e) =>
+                  currentUrl && openDownloadMenu(e, currentUrl, 'aurora-crop')
+                }
               />
             </ReactCrop>
           ) : (
             <>
               {mainImage}
+              <ImageOverlayLayer imageSize={imageSize} />
               <canvas
                 id="image-mask-canvas"
                 ref={maskRef}
@@ -583,6 +695,8 @@ export function ImageCanvasStage() {
             </>
           )}
         </div>
+      </div>
+      <ImageRegenerateBar />
       </div>
     </div>
   );

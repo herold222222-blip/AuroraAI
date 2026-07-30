@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
+import { downloadImage } from '../../utils/downloadImage';
 
 export function ImageFooterBar() {
   const pushToast = useAppStore((s) => s.pushToast);
@@ -9,15 +10,23 @@ export function ImageFooterBar() {
   const past = useImageStore((s) => s.past);
   const future = useImageStore((s) => s.future);
   const resetToOriginal = useImageStore((s) => s.resetToOriginal);
-  const clearEditor = useImageStore((s) => s.clearEditor);
+  const backToSourceList = useImageStore((s) => s.backToSourceList);
   const currentUrl = useImageStore((s) => s.currentUrl);
   const openFromUrl = useImageStore((s) => s.openFromUrl);
   const setShowCompare = useImageStore((s) => s.setShowCompare);
   const showCompare = useImageStore((s) => s.showCompare);
   const compareBeforeUrl = useImageStore((s) => s.compareBeforeUrl);
+  const sourceSnapshotId = useImageStore((s) => s.sourceSnapshotId);
+  const sourceAlbums = useImageStore((s) => s.sourceAlbums);
+  const sourceSidebarMode = useImageStore((s) => s.sourceSidebarMode);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!currentUrl) return null;
+
+  const snapshotMode =
+    Boolean(sourceSnapshotId) ||
+    sourceAlbums.some((a) => Boolean(a.sourceSnapshotId));
+  const listLabel = snapshotMode ? '快照列表' : '原图列表';
 
   return (
     <div className="img-footer-bar">
@@ -65,22 +74,33 @@ export function ImageFooterBar() {
       <button
         type="button"
         className="btn ghost sm"
+        disabled={sourceSidebarMode === 'list'}
         onClick={() => {
-          clearEditor();
-          pushToast('已返回起始页，可重新导入', 'info');
+          backToSourceList();
+          pushToast(
+            snapshotMode ? '已切换到快照列表' : '已切换到原图列表',
+            'info',
+          );
         }}
       >
-        上传新图
+        {listLabel}
       </button>
       <button
         type="button"
         className="btn primary sm"
         onClick={() => {
-          const a = document.createElement('a');
-          a.href = currentUrl;
-          a.download = `aurora-edit-${Date.now()}.png`;
-          a.click();
-          pushToast('已开始下载', 'success');
+          void (async () => {
+            const url =
+              (await useImageStore.getState().getWorkingImageUrl()) ||
+              currentUrl;
+            if (!url) return;
+            try {
+              await downloadImage(url, `aurora-edit-${Date.now()}.png`);
+              pushToast('已开始下载', 'success');
+            } catch {
+              pushToast('下载失败', 'error');
+            }
+          })();
         }}
       >
         下载图像

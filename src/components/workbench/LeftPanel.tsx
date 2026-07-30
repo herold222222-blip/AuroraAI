@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { AI_MODELS } from '../../data/defaultLayers';
-import { Switch, Segmented } from '../common/Controls';
-import type { FaceQuality } from '../../types';
+import { AI_MODELS, resolveAiModel } from '../../data/defaultLayers';
+import { Check, Switch, Segmented } from '../common/Controls';
+import { ConfirmDialog } from '../common/ConfirmDialog';
+import { useImageDownloadMenu } from '../common/ImageDownloadContext';
+import type { FaceQuality, TopologyType } from '../../types';
 
 const ACCEPT = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_SIZE = 20 * 1024 * 1024;
@@ -12,6 +14,11 @@ const FACE_OPTIONS: { value: FaceQuality; label: string }[] = [
   { value: 'high', label: '高' },
   { value: 'medium', label: '中' },
   { value: 'low', label: '低' },
+];
+
+const TOPO_OPTIONS: { value: TopologyType; label: string; hint: string }[] = [
+  { value: 'triangle', label: '三角面', hint: '兼容性更好，适合通用导出' },
+  { value: 'quad', label: '四边面', hint: '利于 Rhino / SketchUp 深化' },
 ];
 
 interface LeftPanelProps {
@@ -26,11 +33,16 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
   const resegment = useAppStore((s) => s.resegment);
   const config = useAppStore((s) => s.config);
   const setConfig = useAppStore((s) => s.setConfig);
+  const retopologizeAll = useAppStore((s) => s.retopologizeAll);
   const build3D = useAppStore((s) => s.build3D);
   const pushToast = useAppStore((s) => s.pushToast);
+  const openDownloadMenu = useImageDownloadMenu();
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const [confirmClearImage, setConfirmClearImage] = useState(false);
   const [drag, setDrag] = useState(false);
+  /** Default off: rebuild with existing layers. */
+  const [resegmentOnRebuild, setResegmentOnRebuild] = useState(false);
 
   const acceptFile = (file: File, replacing: boolean) => {
     if (!ACCEPT.includes(file.type)) {
@@ -58,17 +70,18 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
           <h4>原图</h4>
           {image ? (
             <div className="thumb">
-              <img src={image.url} alt={image.name} />
+              <img
+                src={image.url}
+                alt={image.name}
+                onContextMenu={(e) =>
+                  openDownloadMenu(e, image.url, image.name || 'aurora-source')
+                }
+              />
               <div className="thumb-mask">
                 <button onClick={() => inputRef.current?.click()}>
                   重新上传
                 </button>
-                <button
-                  onClick={() => {
-                    clearImage();
-                    pushToast('已删除图片，请重新上传', 'info');
-                  }}
-                >
+                <button onClick={() => setConfirmClearImage(true)}>
                   删除图片
                 </button>
               </div>
@@ -113,7 +126,7 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
               <label className="field-label">AI 模型选择</label>
               <select
                 className="input"
-                value={config.aiModel}
+                value={resolveAiModel(config.aiModel)}
                 onChange={(e) => setConfig({ aiModel: e.target.value })}
               >
                 {AI_MODELS.map((m) => (
@@ -149,6 +162,31 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
                 onChange={(v) => setConfig({ pbr: v })}
               />
             </div>
+            <div className="field cfg-topo" style={{ marginTop: 8 }}>
+              <label className="field-label">拓扑</label>
+              <div className="cfg-topo-list">
+                {TOPO_OPTIONS.map((o) => {
+                  const active = (config.topology ?? 'triangle') === o.value;
+                  return (
+                    <button
+                      key={o.value}
+                      type="button"
+                      className={`topo-option${active ? ' active' : ''}`}
+                      onClick={() => {
+                        if ((config.topology ?? 'triangle') === o.value) return;
+                        retopologizeAll(o.value);
+                      }}
+                    >
+                      <span className="topo-option-main">
+                        <b>{o.label}</b>
+                        {active && <span className="topo-check">✓</span>}
+                      </span>
+                      <span className="topo-option-hint">{o.hint}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             {showRebuild && (
               <div className="field" style={{ marginTop: 4 }}>
                 <label className="field-label">面数控制</label>
@@ -163,15 +201,42 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
         </div>
 
         {showRebuild && (
-          <button
-            className="btn holo block"
-            onClick={() => build3D()}
-            style={{ marginTop: 4 }}
-          >
-            🚀 重新构建 3D 模型
-          </button>
+          <>
+            <label className="rebuild-resegment-opt">
+              <Check
+                checked={resegmentOnRebuild}
+                onChange={setResegmentOnRebuild}
+              />
+              <span>
+                是否重新对图片分层
+                <em>勾选后先语义分割再重建；默认沿用当前图层</em>
+              </span>
+            </label>
+            <button
+              type="button"
+              className="btn holo block"
+              onClick={() =>
+                build3D({ resegmentFirst: resegmentOnRebuild })
+              }
+              style={{ marginTop: 4 }}
+            >
+              🚀 重新构建 3D 模型
+            </button>
+          </>
         )}
       </div>
+
+      {confirmClearImage && (
+        <ConfirmDialog
+          message="确定删除当前原图？删除后需重新上传。"
+          onCancel={() => setConfirmClearImage(false)}
+          onConfirm={() => {
+            clearImage();
+            setConfirmClearImage(false);
+            pushToast('已删除图片，请重新上传', 'info');
+          }}
+        />
+      )}
     </aside>
   );
 }

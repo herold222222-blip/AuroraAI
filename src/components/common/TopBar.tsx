@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { Logo } from './Logo';
 import { Modal } from './Modal';
 import { ProjectSwitcher } from './ProjectSwitcher';
+import { DonatePage } from './DonatePage';
 
 type Variant = 'upload' | 'workbench';
 
@@ -14,9 +15,6 @@ interface TopBarProps {
 
 export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
   const logoReset = useAppStore((s) => s.logoReset);
-  const back = useAppStore((s) => s.back);
-  const undo = useAppStore((s) => s.undo);
-  const redo = useAppStore((s) => s.redo);
   const pushToast = useAppStore((s) => s.pushToast);
 
   const user = useAuthStore((s) => s.user);
@@ -25,6 +23,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
   const requireAuth = useAuthStore((s) => s.requireAuth);
 
   const [help, setHelp] = useState(false);
+  const [donate, setDonate] = useState(false);
 
   return (
     <header className="topbar">
@@ -50,49 +49,23 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
         <span className="project-name-suffix"> · {workbenchSuffix}</span>
       )}
 
-      {variant === 'workbench' && (
-        <>
-          <div className="topbar-divider" />
-          <button
-            type="button"
-            className="tb-btn"
-            data-auth-free
-            onClick={back}
-          >
-            ← 返回
-          </button>
-        </>
-      )}
-
       <div className="topbar-center">
         {variant === 'workbench' && (
-          <>
-            <span className="autosave">
-              <span className="dot" />
-              自动保存已启用
-            </span>
-            <div style={{ flex: 1 }} />
-            <button
-              type="button"
-              className="tb-btn icon"
-              title="撤销 (Ctrl+Z)"
-              onClick={undo}
-            >
-              ↶
-            </button>
-            <button
-              type="button"
-              className="tb-btn icon"
-              title="重做 (Ctrl+Y)"
-              onClick={redo}
-            >
-              ↷
-            </button>
-          </>
+          <span className="autosave">
+            <span className="dot" />
+            自动保存已启用
+          </span>
         )}
       </div>
 
       <div className="topbar-right" data-auth-free>
+        <button
+          type="button"
+          className="tb-btn tb-btn-donate"
+          onClick={() => setDonate(true)}
+        >
+          赞赏我们
+        </button>
         <button type="button" className="tb-btn" onClick={() => setHelp(true)}>
           帮助
         </button>
@@ -143,7 +116,13 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
                 在 3D 工作台执行拆分 / 合并 / 材质编辑，最终导出或同步至设计软件。
               </li>
               <li>
-                顶部项目下拉可切换/新建项目；仅同一项目内模型截图与图片编辑互通。
+                默认进入「未立项空间」。可用顶部下拉「新立项」保存当前工作；也可随时切回未立项空间或其它项目。
+              </li>
+              <li>
+                在未立项空间中，从模型同步到效果图，或从改图生成三维时，会弹框确认自动立项。
+              </li>
+              <li>
+                仅同一项目内模型截图与图片编辑互通。
               </li>
               <li>
                 Demo 演示版：访客可浏览页面；使用功能需登录。如需获取访问权限，联系万生
@@ -151,11 +130,13 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
               </li>
             </ol>
             <p style={{ color: 'var(--ink-faint)', fontSize: 12, marginTop: 8 }}>
-              提示：点击左上角 Aurora Logo 可清空当前项目并返回首页；「返回」按钮仅退回上一级并保留配置。
+              提示：点击左上角 Aurora Logo 可清空当前项目并返回首页。
             </p>
           </Modal>
         </div>
       )}
+
+      {donate && <DonatePage onClose={() => setDonate(false)} />}
     </header>
   );
 }

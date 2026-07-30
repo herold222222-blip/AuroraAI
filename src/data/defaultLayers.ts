@@ -7,10 +7,23 @@ export const uid = (prefix = 'id'): string => {
 };
 
 export const AI_MODELS = [
-  'Aurora-Depth v2 (景观优化)',
   'Aurora-Geo v1 (通用)',
-  'Aurora-Arch (建筑增强)',
+  'Meshy (Image to 3D)',
 ];
+
+export const MESHY_MODEL_ID = 'Meshy (Image to 3D)';
+export const DEFAULT_AI_MODEL = AI_MODELS[0];
+
+export function isMeshyModel(aiModel: string) {
+  return aiModel === MESHY_MODEL_ID || aiModel.toLowerCase().startsWith('meshy');
+}
+
+/** Map legacy / removed model ids onto the current allow-list. */
+export function resolveAiModel(aiModel: string | undefined | null) {
+  if (aiModel && AI_MODELS.includes(aiModel)) return aiModel;
+  if (aiModel && isMeshyModel(aiModel)) return MESHY_MODEL_ID;
+  return DEFAULT_AI_MODEL;
+}
 
 export const MATERIAL_PRESETS = [
   '草坪 / 软质地被',

@@ -12,7 +12,7 @@ export function ImageWorkbench() {
   const busy = useImageStore((s) => s.busy);
 
   return (
-    <div className="app img-workbench">
+    <div className={`app img-workbench${!currentUrl ? ' is-start' : ''}`}>
       <div className="img-main-col">
         {!currentUrl ? (
           <ImageStartScreen />
@@ -32,7 +32,7 @@ export function ImageWorkbench() {
           </>
         )}
       </div>
-      <ImageRightSidebar />
+      {currentUrl ? <ImageRightSidebar /> : null}
     </div>
   );
 }

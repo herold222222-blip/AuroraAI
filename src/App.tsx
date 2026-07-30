@@ -11,6 +11,8 @@ import { AppSidebar } from './components/common/AppSidebar';
 import { TopBar } from './components/common/TopBar';
 import { AuthGuard } from './components/common/AuthGuard';
 import { LoginModal } from './components/common/LoginModal';
+import { ProjectPromoteModal } from './components/common/ProjectPromoteModal';
+import { ImageDownloadProvider } from './components/common/ImageDownloadContext';
 import { useAuthStore } from './store/useAuthStore';
 
 function RouteProgress({ view }: { view: string }) {
@@ -77,28 +79,35 @@ export default function App() {
       <TopBar variant="workbench" workbenchSuffix="2D 色块工作台" />
     ) : view === 'workbench3d' ? (
       <TopBar variant="workbench" workbenchSuffix="3D 编辑工作台" />
+    ) : view === 'analysis' ? (
+      <TopBar variant="workbench" workbenchSuffix="场景分析" />
+    ) : view === 'build' ? (
+      <TopBar variant="workbench" workbenchSuffix="三维构建" />
     ) : (
-      <TopBar variant="upload" />
+      <TopBar variant="workbench" workbenchSuffix="图生模型" />
     );
 
   return (
-    <div className="app-shell">
-      <AuthGuard />
-      <LoginModal />
-      {topBar}
-      <div className="app-body">
-        <AppSidebar />
-        <div className="app-main">
-          <RouteProgress view={view} />
-          {view === 'upload' && <UploadPage />}
-          {view === 'analysis' && <AnalysisTransition />}
-          {view === 'workbench2d' && <Workbench2D />}
-          {view === 'build' && <BuildTransition />}
-          {view === 'workbench3d' && <Workbench3D />}
-          {view === 'image' && <ImageWorkbench />}
-          <Toasts />
+    <ImageDownloadProvider>
+      <div className="app-shell">
+        <AuthGuard />
+        <LoginModal />
+        <ProjectPromoteModal />
+        {topBar}
+        <div className="app-body">
+          <AppSidebar />
+          <div className="app-main">
+            <RouteProgress view={view} />
+            {view === 'upload' && <UploadPage />}
+            {view === 'analysis' && <AnalysisTransition />}
+            {view === 'workbench2d' && <Workbench2D />}
+            {view === 'build' && <BuildTransition />}
+            {view === 'workbench3d' && <Workbench3D />}
+            {view === 'image' && <ImageWorkbench />}
+            <Toasts />
+          </div>
         </div>
       </div>
-    </div>
+    </ImageDownloadProvider>
   );
 }

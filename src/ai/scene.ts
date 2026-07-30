@@ -1,4 +1,4 @@
-import type { Layer, SceneGrid } from '../types';
+import type { Layer, SceneGrid, TopologyType } from '../types';
 import { uid, newLayerMaterial } from '../data/defaultLayers';
 import {
   CATEGORY_DEFS,
@@ -12,7 +12,11 @@ export interface SceneResult {
   layers: Layer[];
 }
 
-function makeLayer(key: number, cat: CategoryKey): Layer {
+function makeLayer(
+  key: number,
+  cat: CategoryKey,
+  topology: TopologyType,
+): Layer {
   const def = CATEGORY_DEFS[cat];
   return {
     id: uid('layer'),
@@ -25,7 +29,7 @@ function makeLayer(key: number, cat: CategoryKey): Layer {
     height: def.baseHeight,
     kind: def.kind,
     material: newLayerMaterial(def.materialPreset, def.color),
-    topology: 'quad',
+    topology,
     transform: { x: 0, y: 0, z: 0, scale: 1, rx: 0, ry: 0, rz: 0 },
   };
 }
@@ -35,7 +39,10 @@ function makeLayer(key: number, cat: CategoryKey): Layer {
  * list. Empty cells are back-filled with a ground layer so the terrain is
  * continuous, and layers are ordered for display.
  */
-export function buildScene(raw: RawSceneAnalysis): SceneResult {
+export function buildScene(
+  raw: RawSceneAnalysis,
+  topology: TopologyType = 'triangle',
+): SceneResult {
   const categories = [...raw.categories];
   const cells = Int16Array.from(raw.cells);
 
@@ -62,7 +69,7 @@ export function buildScene(raw: RawSceneAnalysis): SceneResult {
   const layers: Layer[] = categories
     .map((cat, idx) => ({ cat, idx }))
     .filter(({ idx }) => counts[idx] > 0)
-    .map(({ cat, idx }) => makeLayer(idx, cat));
+    .map(({ cat, idx }) => makeLayer(idx, cat, topology));
 
   // display order
   layers.sort((a, b) => {

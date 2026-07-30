@@ -9,6 +9,7 @@ import { TopOpBar } from '../workbench/TopOpBar';
 import { MeshStatsPanel } from '../workbench/MeshStatsPanel';
 import { RightSidebar3D } from '../workbench/RightSidebar3D';
 import { SnapshotViewer } from '../workbench/SnapshotViewer';
+import { SnapshotAspectGuide } from '../workbench/SnapshotAspectGuide';
 import { SplitModal } from '../workbench/SplitModal';
 import { MergeModal } from '../workbench/MergeModal';
 import { PbrInspector } from '../workbench/PbrInspector';
@@ -83,6 +84,7 @@ export function Workbench3D() {
 
         <section className="viewport-area">
           <Viewport3D />
+          <SnapshotAspectGuide />
           <SnapshotViewer />
           <MeshStatsPanel />
           <TopOpBar />

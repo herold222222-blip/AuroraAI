@@ -156,14 +156,14 @@ export function LayerManager() {
                 {l.dimension}
               </button>
               <button
-                className={`topo-tag clickable ${(l.topology ?? 'quad') === 'quad' ? 'quad' : 'tri'}`}
+                className={`topo-tag clickable ${(l.topology ?? 'triangle') === 'quad' ? 'quad' : 'tri'}`}
                 title="点击切换拓扑结构（四边面 / 三角面）"
                 onClick={(e) => {
                   e.stopPropagation();
-                  flipTopology(l.id, l.topology ?? 'quad');
+                  flipTopology(l.id, l.topology ?? 'triangle');
                 }}
               >
-                {topoLabel(l.topology ?? 'quad')}
+                {topoLabel(l.topology ?? 'triangle')}
               </button>
             </div>
           ))

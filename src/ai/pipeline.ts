@@ -2,7 +2,7 @@
 // depth estimation (Depth-Anything), running via transformers.js (ONNX Runtime
 // Web). Results are resampled onto a fixed analysis grid consumed by the 2D
 // canvas and the 3D massing builder.
-import { pipeline, env } from '@huggingface/transformers';
+import { pipeline, env, RawImage } from '@huggingface/transformers';
 import { categoryForLabel, type CategoryKey } from './labels';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -13,6 +13,9 @@ const DEPTH_MODEL = 'Xenova/depth-anything-small-hf';
 
 // Prefer the global HF host but fall back to the China-friendly mirror.
 const HOSTS = ['https://huggingface.co', 'https://hf-mirror.com'];
+
+/** Longest side for in-browser inference — large uploads OOM without this. */
+const AI_MAX_SIDE = 1024;
 
 export const GRID_W = 208;
 
@@ -86,13 +89,58 @@ async function createWithFallback(
 }
 
 function getSegmenter(onProgress?: (p: number) => void) {
-  if (!segPromise) segPromise = createWithFallback('image-segmentation', SEG_MODEL, onProgress);
+  if (!segPromise) {
+    segPromise = createWithFallback('image-segmentation', SEG_MODEL, onProgress).catch(
+      (e) => {
+        segPromise = null;
+        throw e;
+      },
+    );
+  }
   return segPromise;
 }
 
 function getDepth(onProgress?: (p: number) => void) {
-  if (!depthPromise) depthPromise = createWithFallback('depth-estimation', DEPTH_MODEL, onProgress);
+  if (!depthPromise) {
+    depthPromise = createWithFallback('depth-estimation', DEPTH_MODEL, onProgress).catch(
+      (e) => {
+        depthPromise = null;
+        throw e;
+      },
+    );
+  }
   return depthPromise;
+}
+
+/**
+ * Decode + downscale before ONNX so high-res uploads (common for design
+ * renders) do not blow browser memory. Example presets are tiny (~100KB) and
+ * worked without this; local files often do not.
+ */
+async function loadImageForAI(imageUrl: string): Promise<RawImage> {
+  const el = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () =>
+      reject(new Error('无法读取图片，请换一张 JPG / PNG / WEBP 后重试'));
+    img.src = imageUrl;
+  });
+
+  const srcW = el.naturalWidth || el.width;
+  const srcH = el.naturalHeight || el.height;
+  if (!srcW || !srcH) throw new Error('图片尺寸无效');
+
+  const scale = Math.min(1, AI_MAX_SIDE / Math.max(srcW, srcH));
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  if (!ctx) throw new Error('无法创建画布用于预处理图片');
+  ctx.drawImage(el, 0, 0, w, h);
+  return RawImage.fromCanvas(canvas);
 }
 
 interface RawImageLike {
@@ -106,6 +154,9 @@ export async function runSceneAI(
   imageUrl: string,
   onProgress?: ProgressFn,
 ): Promise<RawSceneAnalysis> {
+  onProgress?.('正在预处理图片', 0.01);
+  const input = await loadImageForAI(imageUrl);
+
   onProgress?.('正在加载语义分割模型', 0.02);
   const segmenter = await getSegmenter((p) =>
     onProgress?.('正在加载语义分割模型', 0.02 + p * 0.33),
@@ -116,13 +167,13 @@ export async function runSceneAI(
   );
 
   onProgress?.('正在进行语义分割', 0.66);
-  const segOut = (await segmenter(imageUrl)) as {
+  const segOut = (await segmenter(input)) as {
     label: string;
     mask: RawImageLike;
   }[];
 
   onProgress?.('正在估算场景深度', 0.85);
-  const depthOut = (await depthEstimator(imageUrl)) as { depth: RawImageLike };
+  const depthOut = (await depthEstimator(input)) as { depth: RawImageLike };
 
   onProgress?.('正在生成专业图层', 0.94);
 
