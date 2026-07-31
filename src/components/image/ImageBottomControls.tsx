@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { convertToPixelCrop, cropToImg } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { useAppStore } from '../../store/useAppStore';
@@ -8,12 +8,39 @@ import {
   runMultiBrushEdits,
   runMultiHotspotEdits,
 } from '../../image/runAiEdit';
-import { resizeImage, resizeToMaxSide } from '../../image/padImage';
+import {
+  compressDataUrl,
+  resizeImage,
+  resizeToMaxSide,
+} from '../../image/padImage';
 import {
   PromptRefPlus,
   PromptRefThumbs,
   PromptRefZone,
+  RefImageLightbox,
 } from './PromptRefAttach';
+
+const MAX_STYLE_REFS = 50;
+const STYLE_REF_API_BUDGET = 4.2 * 1024 * 1024;
+
+const STYLE_TRANSFER_SYSTEM = `CRITICAL FULL-IMAGE STYLE TRANSFER — STRUCTURE LOCK:
+1. Restyle ONLY appearance: materials, colors, textures, lighting mood, and aesthetic language.
+2. STRICTLY preserve the INPUT image spatial structure: camera angle, perspective, composition, object positions, silhouettes, proportions, and relative layout. Do NOT rearrange, add, remove, or rescale major elements.
+3. Do NOT invent new buildings/trees/furniture placements; paint style onto the existing geometry and layout.
+4. Style reference images (if any) are appearance guides ONLY — never copy their composition or spatial arrangement onto the input.
+5. Output one full-frame image at the SAME size / framing as the input. No borders, captions, or watermarks.`;
+
+function pickStyleRefsForApi(refs: string[]): string[] {
+  const out: string[] = [];
+  let used = 0;
+  for (const r of refs) {
+    if (out.length >= 16) break;
+    if (used + r.length > STYLE_REF_API_BUDGET) break;
+    out.push(r);
+    used += r.length;
+  }
+  return out;
+}
 
 const TABS = [
   { id: 'retouch', label: '改图/修图' },
@@ -57,8 +84,8 @@ export function ImageBottomControls() {
 
   const placeholder = useMemo(() => {
     if (brushRegions.length || hasMask) return '描述要在涂抹区域内修改的内容…';
-    if (hotspots.length === 1) return '描述要点选位置修改的内容…';
-    return '描述全局修改需求，或先点选/涂抹再进行局部编辑…';
+    if (hotspots.length === 1) return '描述要在素描标记处修改的内容…';
+    return '描述全局修改需求，或先素描标记/涂抹再进行局部编辑…';
   }, [hasMask, hotspots.length, brushRegions.length]);
 
   const run = async (p: string, systemHint?: string, forceGlobal?: boolean) => {
@@ -98,11 +125,16 @@ export function ImageBottomControls() {
     if (!currentUrl) return;
     setBusy(true);
     try {
+      const count = hotspots.filter((h) => h.prompt.trim()).length;
       const out = await runMultiHotspotEdits();
       // Don't auto-open compare — keep the live canvas so continuous point edits stay precise.
       commitImage(out, { compareFrom: currentUrl, skipCompare: true });
+      // Marks were consumed by the markup pass (Gemini returns a clean photo).
+      useImageStore.getState().clearHotspots();
       pushToast(
-        `已同步修改 ${hotspots.filter((h) => h.prompt.trim()).length} 处`,
+        count > 1
+          ? `已按 Gemini 素描方式一次性修改 ${count} 处标记`
+          : '素描修改完成',
         'success',
       );
     } catch (err) {
@@ -133,8 +165,8 @@ export function ImageBottomControls() {
     brushRegions.length > 0
       ? '每个独立涂抹区域会编号；橡皮擦可逐个撤销；按住 Shift+左键点击某区域可删除。下方为各区域对应修改要求，点「应用」同步修改。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。'
       : hotspots.length > 0
-        ? '按住 Shift 可添加多个选点；再次点击某点可删除；橡皮擦逐个撤销上一点。点选会识别该位置的物体/材质，下方填写对应修改要求后点「应用」。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。'
-        : '可以直接输入需求进行全局修改，或点击/涂抹图像进行局部编辑。Shift+点击可多选点；涂抹时不相连区域会自动编号。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。';
+        ? '素描按 Gemini 方式执行：红色编号笔画会画进模型输入图，多个标记一次生成。Shift+点击可删除标记；橡皮擦逐个撤销。下方填写各标记要求后点「应用」。可用 ＋、Ctrl+V 或拖入参考图（最多 5 张）。'
+        : '可以直接输入需求进行全局修改，或用素描标记/涂抹进行局部编辑。素描每次笔画自动编号（Gemini 素描修图）；涂抹不相连区域会自动编号。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。';
 
   return (
     <div className="img-controls">
@@ -201,21 +233,21 @@ export function ImageBottomControls() {
               <PromptRefZone className="img-hotspot-prompts" disabled={busy}>
                 {hotspots.map((hp) => (
                   <div key={hp.id} className="img-hotspot-prompt-row">
-                    <span className="img-hotspot-prompt-num" title={`选点 ${hp.n}`}>
+                    <span className="img-hotspot-prompt-num" title={`标记 ${hp.n}`}>
                       {hp.n}
                     </span>
                     <input
                       className="img-prompt-input"
                       value={hp.prompt}
                       onChange={(e) => setHotspotPrompt(hp.id, e.target.value)}
-                      placeholder={`选点 ${hp.n} 的修改要求…（可粘贴/拖入参考图）`}
+                      placeholder={`标记 ${hp.n} 的修改要求…（可粘贴/拖入参考图）`}
                       disabled={busy}
                     />
                     <PromptRefPlus disabled={busy} />
                     <button
                       type="button"
                       className="btn ghost sm"
-                      title="删除该选点"
+                      title="删除该标记"
                       disabled={busy}
                       onClick={() => removeHotspot(hp.id)}
                     >
@@ -438,17 +470,62 @@ export function ImageBottomControls() {
             onSelect={setSelectedStyleId}
             onUpsert={upsertCustomStyle}
             onRemove={removeCustomStyle}
-            onApply={() => {
-              const official = OFFICIAL_STYLES.find((s) => s.id === selectedStyleId);
+            onApply={async () => {
+              const official = OFFICIAL_STYLES.find(
+                (s) => s.id === selectedStyleId,
+              );
               const custom = customStyles.find((s) => s.id === selectedStyleId);
-              if (official) run(official.prompt, undefined, true);
-              else if (custom)
-                run(
-                  custom.prompt || `Apply the style of the reference images: ${custom.name}`,
-                  undefined,
-                  true,
-                );
-              else pushToast('请先选择一种风格', 'info');
+              if (official) {
+                await run(official.prompt, STYLE_TRANSFER_SYSTEM, true);
+                return;
+              }
+              if (custom) {
+                const refs = pickStyleRefsForApi(custom.refs || []);
+                const styleDesc =
+                  custom.prompt.trim() ||
+                  `Match the visual style of the attached reference images (${custom.name}).`;
+                const prompt = [
+                  `Style name: ${custom.name}`,
+                  styleDesc,
+                  'STRUCTURE LOCK: Keep the original image spatial layout, camera, perspective, object positions and silhouettes EXACTLY. Only transfer style appearance (materials / colors / textures / lighting mood). Do not rearrange the scene.',
+                ].join('\n');
+                if (!currentUrl) return;
+                if (!custom.prompt.trim() && !refs.length) {
+                  pushToast('请为该风格填写描述词或上传参考图', 'info');
+                  return;
+                }
+                setBusy(true);
+                try {
+                  const trimmed = prompt.trim();
+                  useImageStore.getState().setLastGeneratePrompt(trimmed);
+                  const out = await runAiEdit({
+                    prompt: trimmed,
+                    systemHint: STYLE_TRANSFER_SYSTEM,
+                    forceGlobal: true,
+                    materialRefs: refs,
+                  });
+                  commitImage(out, {
+                    compareFrom: currentUrl,
+                    skipCompare: false,
+                    prompt: trimmed,
+                  });
+                  pushToast(
+                    refs.length
+                      ? `风格迁移完成（参考图 ${refs.length} 张）`
+                      : '风格迁移完成',
+                    'success',
+                  );
+                } catch (err) {
+                  pushToast(
+                    err instanceof Error ? err.message : String(err),
+                    'error',
+                  );
+                } finally {
+                  setBusy(false);
+                }
+                return;
+              }
+              pushToast('请先选择一种风格', 'info');
             }}
           />
         )}
@@ -461,7 +538,8 @@ function CropPane({ busy }: { busy: boolean }) {
   const currentUrl = useImageStore((s) => s.currentUrl);
   const commitImage = useImageStore((s) => s.commitImage);
   const cropAspect = useImageStore((s) => s.cropAspect);
-  const setCropAspect = useImageStore((s) => s.setCropAspect);
+  const cropGuideVisible = useImageStore((s) => s.cropGuideVisible);
+  const toggleCropGuide = useImageStore((s) => s.toggleCropGuide);
   const cropSelection = useImageStore((s) => s.cropSelection);
   const pushToast = useAppStore((s) => s.pushToast);
   const [applying, setApplying] = useState(false);
@@ -497,24 +575,33 @@ function CropPane({ busy }: { busy: boolean }) {
     }
   };
 
+  const presets: { key: string; label: string; value: typeof cropAspect }[] = [
+    { key: 'original', label: '锁定原图比例', value: 'original' },
+    { key: 'free', label: '自由', value: undefined },
+    { key: '1:1', label: '1:1', value: 1 },
+    { key: '4:3', label: '4:3', value: 4 / 3 },
+    { key: '16:9', label: '16:9', value: 16 / 9 },
+  ];
+
   return (
     <div className="img-tab-pane">
       <p className="img-tab-hint">
-        在上方主画布拖动选区；可选锁定比例后点击「应用裁剪」。
+        在上方主画布拖动选区；再次点击当前比例可隐藏/显示裁剪框，切换其他比例会重新显示。
       </p>
       <div className="img-preset-row">
-        {(
-          [
-            [undefined, '自由'],
-            [1, '1:1'],
-            [16 / 9, '16:9'],
-          ] as const
-        ).map(([a, label]) => (
+        {presets.map(({ key, label, value }) => (
           <button
-            key={label}
+            key={key}
             type="button"
-            className={`btn ghost sm${cropAspect === a ? ' active' : ''}`}
-            onClick={() => setCropAspect(a)}
+            className={`btn ghost sm${
+              cropAspect === value && cropGuideVisible ? ' active' : ''
+            }`}
+            title={
+              cropAspect === value && cropGuideVisible
+                ? '再次点击隐藏裁剪框'
+                : '显示裁剪框'
+            }
+            onClick={() => toggleCropGuide(value)}
           >
             {label}
           </button>
@@ -523,7 +610,7 @@ function CropPane({ busy }: { busy: boolean }) {
       <button
         type="button"
         className="img-gen-btn"
-        disabled={busy || applying || !cropSelection?.width}
+        disabled={busy || applying || !cropGuideVisible || !cropSelection?.width}
         onClick={() => void applyCrop()}
       >
         {applying ? '裁剪中…' : '应用裁剪'}
@@ -554,10 +641,147 @@ function StylePane({
     refs: string[];
   }) => void;
   onRemove: (id: string) => void;
-  onApply: () => void;
+  onApply: () => void | Promise<void>;
 }) {
+  const pushToast = useAppStore((s) => s.pushToast);
   const [name, setName] = useState('');
   const [desc, setDesc] = useState('');
+  const [refs, setRefs] = useState<string[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState<{ url: string; label: string } | null>(
+    null,
+  );
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const selectedCustom = custom.find((s) => s.id === selectedId) ?? null;
+
+  const resetForm = () => {
+    setName('');
+    setDesc('');
+    setRefs([]);
+    setEditingId(null);
+    setFormOpen(false);
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const startCreate = () => {
+    setEditingId(null);
+    setName('');
+    setDesc('');
+    setRefs([]);
+    setFormOpen(true);
+  };
+
+  const startEdit = (s: {
+    id: string;
+    name: string;
+    prompt: string;
+    refs: string[];
+  }) => {
+    onSelect(s.id);
+    setEditingId(s.id);
+    setName(s.name);
+    setDesc(s.prompt);
+    setRefs([...(s.refs || [])]);
+    setFormOpen(true);
+  };
+
+  const addFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const room = MAX_STYLE_REFS - refs.length;
+    if (room <= 0) {
+      pushToast(`参考图最多 ${MAX_STYLE_REFS} 张`, 'info');
+      return;
+    }
+    const list = Array.from(files).slice(0, room);
+    setSaving(true);
+    try {
+      const next: string[] = [];
+      for (const file of list) {
+        if (!file.type.startsWith('image/')) continue;
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(new Error('读取失败'));
+          reader.readAsDataURL(file);
+        });
+        next.push(await compressDataUrl(dataUrl, 768, 0.7));
+      }
+      if (!next.length) {
+        pushToast('请选择图片文件', 'info');
+        return;
+      }
+      setRefs((prev) => [...prev, ...next].slice(0, MAX_STYLE_REFS));
+      if (list.length < files.length) {
+        pushToast(`已达上限，仅添加 ${list.length} 张`, 'info');
+      }
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '上传失败', 'error');
+    } finally {
+      setSaving(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const saveStyle = () => {
+    if (!name.trim()) {
+      pushToast('请填写风格名称', 'info');
+      return;
+    }
+    if (!desc.trim() && refs.length === 0) {
+      pushToast('请填写描述词或上传至少一张参考图', 'info');
+      return;
+    }
+    onUpsert({
+      id: editingId || undefined,
+      name: name.trim(),
+      prompt: desc.trim(),
+      refs,
+    });
+    pushToast(
+      editingId
+        ? `已更新风格「${name.trim()}」`
+        : `已保存风格「${name.trim()}」`,
+      'success',
+    );
+    resetForm();
+  };
+
+  const renderRefGrid = (
+    urls: string[],
+    opts?: { removable?: boolean },
+  ) => (
+    <div className="img-style-ref-grid">
+      {urls.map((url, i) => (
+        <div key={`${i}-${url.slice(-16)}`} className="img-style-ref-thumb">
+          <button
+            type="button"
+            className="img-style-ref-open"
+            title={`点击放大 图${i + 1}`}
+            onClick={() =>
+              setPreview({ url, label: `参考图 ${i + 1}` })
+            }
+          >
+            <img src={url} alt={`参考 ${i + 1}`} />
+          </button>
+          {opts?.removable && (
+            <button
+              type="button"
+              className="img-style-ref-del"
+              title="移除"
+              onClick={() =>
+                setRefs((prev) => prev.filter((_, j) => j !== i))
+              }
+            >
+              ×
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <div className="img-tab-pane">
@@ -569,13 +793,17 @@ function StylePane({
               key={s.id}
               type="button"
               className={`btn ghost sm${selectedId === s.id ? ' active' : ''}`}
-              onClick={() => onSelect(s.id)}
+              aria-pressed={selectedId === s.id}
+              onClick={() =>
+                onSelect(selectedId === s.id ? null : s.id)
+              }
             >
               {s.name}
             </button>
           ))}
         </div>
       </div>
+
       <div className="img-preset-group">
         <span className="img-preset-label">我的自定义风格</span>
         <div className="img-preset-row wrap">
@@ -584,51 +812,144 @@ function StylePane({
               <button
                 type="button"
                 className={`btn ghost sm${selectedId === s.id ? ' active' : ''}`}
-                onClick={() => onSelect(s.id)}
+                aria-pressed={selectedId === s.id}
+                title={
+                  s.refs?.length
+                    ? `${s.name}（${s.refs.length} 张参考图）`
+                    : s.name
+                }
+                onClick={() =>
+                  onSelect(selectedId === s.id ? null : s.id)
+                }
               >
                 {s.name}
+                {s.refs?.length ? (
+                  <span className="img-style-ref-count">{s.refs.length}</span>
+                ) : null}
+              </button>
+              <button
+                type="button"
+                className="img-style-edit"
+                title="修改"
+                onClick={() => startEdit(s)}
+              >
+                改
               </button>
               <button
                 type="button"
                 className="img-style-del"
                 title="删除"
-                onClick={() => onRemove(s.id)}
+                onClick={() => {
+                  if (editingId === s.id) resetForm();
+                  onRemove(s.id);
+                }}
               >
                 ×
               </button>
             </span>
           ))}
+          {!formOpen && (
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={startCreate}
+            >
+              ＋ 新建
+            </button>
+          )}
         </div>
-        <div className="img-prompt-row">
-          <input
-            className="img-prompt-input"
-            placeholder="新风格名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <input
-            className="img-prompt-input"
-            placeholder="风格提示词"
-            value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn ghost sm"
-            onClick={() => {
-              if (!name.trim()) return;
-              onUpsert({ name: name.trim(), prompt: desc.trim(), refs: [] });
-              setName('');
-              setDesc('');
-            }}
-          >
-            新建
-          </button>
-        </div>
+
+        {selectedCustom && !formOpen && (selectedCustom.refs?.length ?? 0) > 0 && (
+          <div className="img-style-selected-refs">
+            <span className="img-style-upload-hint">
+              「{selectedCustom.name}」参考图（点击放大）
+            </span>
+            {renderRefGrid(selectedCustom.refs)}
+          </div>
+        )}
+
+        {formOpen && (
+          <div className="img-style-create">
+            <div className="img-style-create-title">
+              {editingId ? '修改自定义风格' : '新建自定义风格'}
+            </div>
+            <input
+              className="img-prompt-input"
+              placeholder="风格名称（必填）"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={busy || saving}
+            />
+            <textarea
+              className="img-prompt-input img-style-desc"
+              placeholder="描述词：说明目标风格、材质、色调、氛围等（可选，有参考图时更准）"
+              value={desc}
+              rows={3}
+              onChange={(e) => setDesc(e.target.value)}
+              disabled={busy || saving}
+            />
+            <div className="img-style-upload-row">
+              <button
+                type="button"
+                className="btn ghost sm"
+                disabled={busy || saving || refs.length >= MAX_STYLE_REFS}
+                onClick={() => fileRef.current?.click()}
+              >
+                {saving
+                  ? '上传中…'
+                  : `上传参考图（${refs.length}/${MAX_STYLE_REFS}）`}
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                onChange={(e) => void addFiles(e.target.files)}
+              />
+              <span className="img-style-upload-hint">
+                支持多选，最多 {MAX_STYLE_REFS} 张；点击缩略图可放大
+              </span>
+            </div>
+            {refs.length > 0 && renderRefGrid(refs, { removable: true })}
+            <div className="img-style-create-actions">
+              <button
+                type="button"
+                className="btn ghost sm"
+                disabled={busy || saving}
+                onClick={resetForm}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn holo sm"
+                disabled={busy || saving}
+                onClick={saveStyle}
+              >
+                {editingId ? '保存修改' : '保存风格'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-      <button type="button" className="img-gen-btn" disabled={busy} onClick={onApply}>
+
+      <button
+        type="button"
+        className="img-gen-btn"
+        disabled={busy || !selectedId}
+        onClick={() => void onApply()}
+      >
         应用选定风格
       </button>
+
+      {preview && (
+        <RefImageLightbox
+          url={preview.url}
+          label={preview.label}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </div>
   );
 }

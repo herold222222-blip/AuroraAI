@@ -848,6 +848,13 @@ select {
   border-color: var(--holo);
   color: var(--holo-deep);
 }
+.btn.ghost.active {
+  background: color-mix(in srgb, var(--holo) 14%, #fff);
+  border-color: var(--holo);
+  color: var(--holo-deep);
+  font-weight: 650;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--holo) 45%, transparent);
+}
 .btn.soft {
   background: var(--canvas);
   color: var(--ink);

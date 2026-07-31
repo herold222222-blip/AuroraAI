@@ -5,7 +5,7 @@ const MODEL = 'gemini-3.1-flash-image';
 export interface EditRequest {
   imageDataUrl: string;
   prompt: string;
-  mode?: 'global' | 'hotspot' | 'mask';
+  mode?: 'global' | 'hotspot' | 'mask' | 'sketch';
   hotspot?: { x: number; y: number };
   maskDataUrl?: string;
   materialRefs?: string[];
@@ -79,6 +79,21 @@ function buildPrompt(req: EditRequest): string {
         .filter(Boolean)
         .join('\n'),
     );
+  } else if (req.mode === 'sketch') {
+    parts.push(
+      [
+        'GEMINI SKETCH / MARKUP IMAGE EDIT:',
+        'IMAGE 1 = photo with red freehand strokes and red numbered badges drawn on subjects to edit.',
+        'There is NO separate mask image — the red ink ON the photo is the spatial guide (same as Gemini app markup).',
+        '1) For each "Mark N: …" in the user instruction, locate red mark number N on IMAGE 1.',
+        '2) Identify the real-world subject / material under that mark (not the ink itself).',
+        '3) Apply that mark\'s instruction ONLY to that subject.',
+        '4) When multiple marks are present, apply ALL of them in one coherent edit pass.',
+        '5) Leave unmarked areas visually unchanged (geometry, lighting, neighbors, sky, background).',
+        '6) OUTPUT MUST be a clean photo: erase every red stroke, number badge, circle, and markup artifact.',
+        '7) Keep full-frame size identical to IMAGE 1. No borders, captions, or watermarks.',
+      ].join('\n'),
+    );
   } else if (req.mode === 'hotspot' && req.hotspot) {
     parts.push(
       [
@@ -109,11 +124,26 @@ function buildPrompt(req: EditRequest): string {
     const labels = req.materialRefs
       .map((_, i) => `图${i + 1}`)
       .join('、');
-    parts.push(
-      `${req.materialRefs.length} reference image(s) follow AFTER the mask (if any), labeled ${labels} in order.`,
-      'When the user mentions 图1/图2/…, use the matching reference.',
-      'Use them ONLY as appearance references for the allowed edit region — never restyle the whole image.',
-    );
+    if (req.mode === 'global') {
+      parts.push(
+        `${req.materialRefs.length} style reference image(s) follow, labeled ${labels} in order.`,
+        'Use them as APPEARANCE / STYLE REFERENCES only: materials, color grading, lighting mood, texture language, and aesthetic.',
+        'CRITICAL: Do NOT copy the references\' spatial layout, composition, camera, or object arrangement. Keep the INPUT image structure/layout strictly unchanged.',
+        'When the user mentions 图1/图2/…, prioritize that reference for appearance cues.',
+      );
+    } else if (req.mode === 'sketch') {
+      parts.push(
+        `${req.materialRefs.length} reference image(s) follow, labeled ${labels} in order.`,
+        'When a Mark instruction mentions 图1/图2/…, use that reference for the marked subject only.',
+        'Use references as appearance cues for marked subjects — never restyle unmarked areas.',
+      );
+    } else {
+      parts.push(
+        `${req.materialRefs.length} reference image(s) follow AFTER the mask (if any), labeled ${labels} in order.`,
+        'When the user mentions 图1/图2/…, use the matching reference.',
+        'Use them ONLY as appearance references for the allowed edit region — never restyle the whole image.',
+      );
+    }
   }
 
   parts.push(

@@ -85,7 +85,7 @@ export function ImageStartScreen() {
           <article className="img-feature-card">
             <h3>精确修图</h3>
             <p>
-              点击图像上的任意点或涂抹精确区域，即可精准去除瑕疵、更改颜色或添加元素。
+              在图像上自由勾画标记或涂抹精确区域，即可精准去除瑕疵、更改颜色或添加元素。
             </p>
           </article>
           <article className="img-feature-card">
@@ -131,7 +131,7 @@ export function ImageModeBadge() {
   if (brushRegions.length > 1) {
     label = `当前模式：局部修改（${brushRegions.length} 涂抹区域）`;
   } else if (hotspots.length > 1) {
-    label = `当前模式：局部修改（${hotspots.length} 点）`;
+    label = `当前模式：局部修改（${hotspots.length} 处标记）`;
   } else if (local) {
     label = '当前模式：局部修改';
   }

@@ -1,14 +1,14 @@
 import { useAppStore } from '../../store/useAppStore';
 import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 
-/** Full-viewport overlay that shows a selected history snapshot. */
+/** Full-viewport overlay that shows a snapshot image (magnifier). */
 export function SnapshotViewer() {
   const snapshots = useAppStore((s) => s.snapshots);
-  const viewingSnapshotId = useAppStore((s) => s.viewingSnapshotId);
-  const setViewingSnapshot = useAppStore((s) => s.setViewingSnapshot);
+  const previewingSnapshotId = useAppStore((s) => s.previewingSnapshotId);
+  const setPreviewingSnapshot = useAppStore((s) => s.setPreviewingSnapshot);
   const openDownloadMenu = useImageDownloadMenu();
 
-  const shot = snapshots.find((s) => s.id === viewingSnapshotId);
+  const shot = snapshots.find((s) => s.id === previewingSnapshotId);
   if (!shot) return null;
 
   return (
@@ -18,7 +18,7 @@ export function SnapshotViewer() {
         className="snapshot-viewer-close"
         title="关闭预览"
         aria-label="关闭预览"
-        onClick={() => setViewingSnapshot(null)}
+        onClick={() => setPreviewingSnapshot(null)}
       >
         ×
       </button>

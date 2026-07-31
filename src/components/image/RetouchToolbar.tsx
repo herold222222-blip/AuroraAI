@@ -7,6 +7,8 @@ export function RetouchToolbar() {
   const setTool = useImageStore((s) => s.setRetouchTool);
   const brushSize = useImageStore((s) => s.brushSize);
   const setBrushSize = useImageStore((s) => s.setBrushSize);
+  const sketchBrushSize = useImageStore((s) => s.sketchBrushSize);
+  const setSketchBrushSize = useImageStore((s) => s.setSketchBrushSize);
 
   useEffect(() => {
     if (tab !== 'retouch') return;
@@ -62,25 +64,28 @@ export function RetouchToolbar() {
       <button
         type="button"
         className={`img-tool-btn${tool === 'point' ? ' active' : ''}`}
-        title="选点工具（Shift+点击可多选；再点可选点删除）"
+        title="素描标记（按住左键连续勾画红色笔迹；每次笔画为独立编号标记；Shift+点击可删除）"
         onClick={() => setTool('point')}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <circle cx="12" cy="12" r="4.2" fill="currentColor" />
-          <circle
-            cx="12"
-            cy="12"
-            r="8"
+          <path
+            d="M4 18.5c2.2-1.2 4.2-4.6 5.8-7.4C11.6 7.8 13.2 5 15.2 4.2c1.4-.55 2.9-.1 3.9 1.1.9 1.1.95 2.65.1 3.9-1.4 2.05-4.35 3.35-6.95 4.55L8.5 15.5 4 18.5z"
             stroke="currentColor"
             strokeWidth="1.6"
-            opacity="0.45"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M13.2 6.2l3.8 3.6"
+            stroke="currentColor"
+            strokeWidth="1.6"
+            strokeLinecap="round"
           />
         </svg>
       </button>
       <button
         type="button"
         className={`img-tool-btn${tool === 'eraser' ? ' active' : ''}`}
-        title="橡皮擦：逐个撤销涂抹区域或选点"
+        title="橡皮擦：逐个撤销涂抹区域或素描标记"
         onClick={() => setTool('eraser')}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -105,6 +110,21 @@ export function RetouchToolbar() {
             className="img-brush-range"
           />
           <span>{brushSize}</span>
+        </div>
+      )}
+      {tool === 'point' && (
+        <div className="img-brush-size">
+          <input
+            type="range"
+            min={1}
+            max={40}
+            value={sketchBrushSize}
+            onChange={(e) => setSketchBrushSize(Number(e.target.value))}
+            title={`素描笔宽 ${sketchBrushSize}px`}
+            aria-label="素描笔宽"
+            className="img-brush-range"
+          />
+          <span>{sketchBrushSize}</span>
         </div>
       )}
     </div>

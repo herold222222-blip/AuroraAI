@@ -296,6 +296,54 @@ export async function hotspotRoiAlpha(
   };
 }
 
+/**
+ * Soft ROI along a freehand sketch stroke (Gemini-style mark).
+ * Dilates the stroke and feathers it so edits follow the mark without
+ * requiring a hard flood-fill of the whole object.
+ */
+export async function sketchRoiAlpha(
+  strokeMaskDataUrl: string,
+): Promise<{ alpha: Float32Array; w: number; h: number; maskDataUrl: string }> {
+  const img = await loadImageEl(strokeMaskDataUrl);
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(img, 0, 0);
+  const { data } = ctx.getImageData(0, 0, w, h);
+
+  let fill = new Uint8Array(w * h);
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    fill[p] = data[i] > 127 ? 1 : 0;
+  }
+
+  const minDim = Math.min(w, h);
+  const dilatePx = Math.max(6, Math.round(minDim * 0.018));
+  fill = dilateBinary(fill, w, h, dilatePx);
+
+  const alpha = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) alpha[i] = fill[i] ? 1 : 0;
+
+  const feathered = featherAlpha(
+    alpha,
+    w,
+    h,
+    Math.max(4, Math.round(minDim * 0.01)),
+  );
+
+  const bin = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) bin[i] = feathered[i] > 0.12 ? 1 : 0;
+
+  return {
+    alpha: feathered,
+    w,
+    h,
+    maskDataUrl: binaryToDataUrl(bin, w, h),
+  };
+}
+
 /** @deprecated prefer hotspotRoiAlpha; kept for compatibility */
 export async function floodFillMask(
   imageUrl: string,

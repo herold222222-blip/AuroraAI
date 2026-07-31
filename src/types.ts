@@ -126,6 +126,12 @@ export interface ToastMessage {
   tone: 'info' | 'success' | 'error' | 'warning';
 }
 
+/** Orbit camera pose for restoring a snapshot view in the 3D viewport */
+export interface SnapshotCameraPose {
+  position: [number, number, number];
+  target: [number, number, number];
+}
+
 /** Viewport camera / history snapshot captured from the 3D canvas */
 export interface ModelSnapshot {
   id: string;
@@ -134,4 +140,6 @@ export interface ModelSnapshot {
   label: string;
   /** Seeded from image→3D handoff; kept as the first snapshot. */
   fromSourceImage?: boolean;
+  /** Camera pose when the shot was taken (or fitted after Meshy load). */
+  cameraPose?: SnapshotCameraPose;
 }

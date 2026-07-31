@@ -10,11 +10,13 @@ import { viewportController } from './viewportController';
 export function CameraSnapshotPanel() {
   const snapshots = useAppStore((s) => s.snapshots);
   const viewingSnapshotId = useAppStore((s) => s.viewingSnapshotId);
+  const previewingSnapshotId = useAppStore((s) => s.previewingSnapshotId);
   const addSnapshot = useAppStore((s) => s.addSnapshot);
   const removeSnapshot = useAppStore((s) => s.removeSnapshot);
   const renameSnapshot = useAppStore((s) => s.renameSnapshot);
   const reorderSnapshots = useAppStore((s) => s.reorderSnapshots);
   const setViewingSnapshot = useAppStore((s) => s.setViewingSnapshot);
+  const setPreviewingSnapshot = useAppStore((s) => s.setPreviewingSnapshot);
   const sendSnapshotsToImage = useAppStore((s) => s.sendSnapshotsToImage);
   const pushToast = useAppStore((s) => s.pushToast);
   const openDownloadMenu = useImageDownloadMenu();
@@ -26,16 +28,20 @@ export function CameraSnapshotPanel() {
   const lastClickedIdRef = useRef<string | null>(null);
 
   const onAdd = () => {
-    const prev = viewingSnapshotId;
-    if (prev) setViewingSnapshot(null);
+    const prevView = viewingSnapshotId;
+    const prevPreview = previewingSnapshotId;
+    if (prevView) setViewingSnapshot(null);
+    if (prevPreview) setPreviewingSnapshot(null);
     requestAnimationFrame(() => {
       const url = viewportController.captureSnapshot();
       if (!url || url === 'data:,') {
-        if (prev) setViewingSnapshot(prev);
+        if (prevView) setViewingSnapshot(prevView);
+        if (prevPreview) setPreviewingSnapshot(prevPreview);
         pushToast('快照失败：无法读取视口画面', 'error');
         return;
       }
-      addSnapshot(url);
+      const pose = viewportController.getCameraPose() ?? undefined;
+      addSnapshot(url, pose);
     });
   };
 
@@ -96,7 +102,7 @@ export function CameraSnapshotPanel() {
         <span className="camera-panel-count">{snapshots.length}</span>
       </div>
       <p className="camera-panel-hint">
-        视口内 16:9 虚线框为快照取景范围；点击勾选可多选，选中后可下载或同步到图片工具。右键预览图可下载。
+        点击缩略图切换到对应拍摄角度；左上角方框勾选后可多选下载或同步。右上角放大镜可在画布区查看大图。
       </p>
 
       {snapshots.length > 0 && (
@@ -126,15 +132,17 @@ export function CameraSnapshotPanel() {
               key={s.id}
               className={`camera-snap-card${
                 viewingSnapshotId === s.id ? ' active' : ''
-              }${isSelected ? ' is-selected' : ''}${
-                dragId === s.id ? ' dragging' : ''
-              }${overId === s.id && dragId !== s.id ? ' drag-over' : ''}`}
+              }${previewingSnapshotId === s.id ? ' is-previewing' : ''}${
+                isSelected ? ' is-selected' : ''
+              }${dragId === s.id ? ' dragging' : ''}${
+                overId === s.id && dragId !== s.id ? ' drag-over' : ''
+              }`}
               draggable
               onDragStart={(e) => {
                 const t = e.target as HTMLElement;
                 if (
                   t.closest(
-                    'input, .camera-snap-delete, .camera-snap-label, .inline-rename, .camera-snap-check',
+                    'input, .camera-snap-delete, .camera-snap-zoom, .camera-snap-label, .inline-rename, .camera-snap-check',
                   )
                 ) {
                   e.preventDefault();
@@ -183,13 +191,18 @@ export function CameraSnapshotPanel() {
                 type="button"
                 className="camera-snap-thumb"
                 title={s.label}
-                onClick={(e) => {
+                onClick={() => {
                   if (suppressClickRef.current) {
                     suppressClickRef.current = false;
                     return;
                   }
-                  toggleSelect(s.id, { range: e.shiftKey });
+                  // Close image preview so the live 3D angle change is visible.
+                  if (previewingSnapshotId) setPreviewingSnapshot(null);
+                  // Always restore this snapshot's camera pose (even if already active).
                   setViewingSnapshot(s.id);
+                  if (!s.cameraPose) {
+                    pushToast('该快照未记录视角，请重新添加快照', 'info');
+                  }
                 }}
                 onContextMenu={(e) => openDownloadMenu(e, s.url, s.label)}
               >
@@ -211,6 +224,22 @@ export function CameraSnapshotPanel() {
                   )}
                 </div>
               </div>
+              <button
+                type="button"
+                className="camera-snap-zoom"
+                title="放大查看"
+                aria-label="放大查看"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (previewingSnapshotId === s.id) {
+                    setPreviewingSnapshot(null);
+                  } else {
+                    setPreviewingSnapshot(s.id);
+                  }
+                }}
+              >
+                🔍
+              </button>
               <button
                 type="button"
                 className="camera-snap-delete"

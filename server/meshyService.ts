@@ -13,7 +13,11 @@ export interface MeshyCreateBody {
   enablePbr?: boolean;
   shouldTexture?: boolean;
   textureResolution?: '2k' | '4k' | '8k';
+  /** Defaults to smart-topology (natively separated parts). */
+  modelType?: 'standard' | 'smart-topology';
+  /** For smart-topology use meshy-t2; for standard use latest / meshy-6. */
   aiModel?: string;
+  targetPolycount?: number;
 }
 
 export async function createImageTo3dTask(body: MeshyCreateBody) {
@@ -22,14 +26,27 @@ export async function createImageTo3dTask(body: MeshyCreateBody) {
     throw new Error('Meshy 需要 data:image 格式的图片');
   }
 
+  const model_type = body.modelType ?? 'smart-topology';
+  const ai_model =
+    body.aiModel ??
+    (model_type === 'smart-topology' ? 'meshy-t2' : 'latest');
+
   const payload: Record<string, unknown> = {
     image_url,
-    ai_model: body.aiModel ?? 'latest',
+    model_type,
+    ai_model,
     should_texture: body.shouldTexture ?? true,
     enable_pbr: Boolean(body.enablePbr),
   };
   if (body.textureResolution) {
     payload.texture_resolution = body.textureResolution;
+  }
+  if (
+    model_type === 'smart-topology' &&
+    ai_model === 'meshy-t2' &&
+    typeof body.targetPolycount === 'number'
+  ) {
+    payload.target_polycount = body.targetPolycount;
   }
 
   const res = await fetch(`${MESHY_BASE}/image-to-3d`, {

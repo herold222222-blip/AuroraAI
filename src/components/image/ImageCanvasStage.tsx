@@ -3,7 +3,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type MouseEvent,
   type PointerEvent as ReactPointerEvent,
   type SyntheticEvent,
   type CSSProperties,
@@ -14,12 +13,14 @@ import ReactCrop, {
   type Crop,
 } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
-import { useImageStore } from '../../image/useImageStore';
+import { useImageStore, resolveCropAspect } from '../../image/useImageStore';
 import { useAppStore } from '../../store/useAppStore';
 import {
   findBrushRegionAt,
+  findHotspotSketchAt,
   mergeStrokeIntoRegions,
   redrawBrushOverlay,
+  strokeCanvasToSketchMark,
 } from '../../image/brushStrokeMerge';
 import { ImageOverlayLayer } from './ImageOverlayLayer';
 import { ImageRegenerateBar } from './ImageRegenerateBar';
@@ -61,9 +62,10 @@ export function ImageCanvasStage() {
   const tab = useImageStore((s) => s.tab);
   const retouchTool = useImageStore((s) => s.retouchTool);
   const brushSize = useImageStore((s) => s.brushSize);
+  const sketchBrushSize = useImageStore((s) => s.sketchBrushSize);
   const hotspots = useImageStore((s) => s.hotspots);
   const brushRegions = useImageStore((s) => s.brushRegions);
-  const placeHotspot = useImageStore((s) => s.placeHotspot);
+  const removeHotspot = useImageStore((s) => s.removeHotspot);
   const clearHotspots = useImageStore((s) => s.clearHotspots);
   const undoLastHotspot = useImageStore((s) => s.undoLastHotspot);
   const undoLastBrushRegion = useImageStore((s) => s.undoLastBrushRegion);
@@ -74,6 +76,7 @@ export function ImageCanvasStage() {
   const setShowCompare = useImageStore((s) => s.setShowCompare);
   const cropAspect = useImageStore((s) => s.cropAspect);
   const cropSelection = useImageStore((s) => s.cropSelection);
+  const cropGuideVisible = useImageStore((s) => s.cropGuideVisible);
   const setCropSelection = useImageStore((s) => s.setCropSelection);
   const openDownloadMenu = useImageDownloadMenu();
   const pushToast = useAppStore((s) => s.pushToast);
@@ -93,6 +96,10 @@ export function ImageCanvasStage() {
     null,
   );
   const painting = useRef(false);
+  /** Which tool started the current freehand stroke. */
+  const paintingTool = useRef<'brush' | 'point' | null>(null);
+  /** Last layout-space point for continuous sketch/brush curves. */
+  const lastPaint = useRef<{ x: number; y: number } | null>(null);
   const strokeDirty = useRef(false);
   const mergeQueue = useRef(Promise.resolve());
   const panning = useRef(false);
@@ -109,6 +116,7 @@ export function ImageCanvasStage() {
     setImageSize(null);
     painting.current = false;
     strokeDirty.current = false;
+    lastPaint.current = null;
     const stroke = strokeRef.current;
     if (stroke) {
       stroke.getContext('2d')!.clearRect(0, 0, stroke.width, stroke.height);
@@ -179,8 +187,28 @@ export function ImageCanvasStage() {
     } else {
       syncCanvasSize(strokeRef.current);
     }
-    const regions = useImageStore.getState().brushRegions;
-    await redrawBrushOverlay(mask, regions);
+    const state = useImageStore.getState();
+    const regions = state.brushRegions;
+    if (regions.length) {
+      await redrawBrushOverlay(mask, regions);
+      return;
+    }
+    const sketchRegions = state.hotspots
+      .filter((h) => h.strokeMaskDataUrl)
+      .map((h) => ({
+        id: h.id,
+        n: h.n,
+        prompt: h.prompt,
+        maskDataUrl: h.strokeMaskDataUrl!,
+        cx: h.x,
+        cy: h.y,
+      }));
+    if (sketchRegions.length) {
+      await redrawBrushOverlay(mask, sketchRegions, { tint: 'red' });
+      return;
+    }
+    const ctx = mask.getContext('2d');
+    ctx?.clearRect(0, 0, mask.width, mask.height);
   }, [syncCanvasSize]);
 
   useEffect(() => {
@@ -194,7 +222,7 @@ export function ImageCanvasStage() {
 
   useEffect(() => {
     void refreshOverlay();
-  }, [brushRegions, refreshOverlay]);
+  }, [brushRegions, hotspots, refreshOverlay]);
 
   useEffect(() => {
     resetView();
@@ -318,11 +346,12 @@ export function ImageCanvasStage() {
   }, [comparing, currentUrl, compareBeforeUrl]);
 
   useEffect(() => {
-    if (tab !== 'crop') return;
+    if (tab !== 'crop' || !cropGuideVisible) return;
     const img = imgRef.current;
     if (!img || !img.complete || !img.width) return;
-    setCropSelection(initCrop(img.width, img.height, cropAspect));
-  }, [cropAspect, tab, currentUrl, setCropSelection]);
+    const aspect = resolveCropAspect(cropAspect, img.width, img.height);
+    setCropSelection(initCrop(img.width, img.height, aspect));
+  }, [cropAspect, cropGuideVisible, tab, currentUrl, setCropSelection]);
 
   const toImageCoords = (clientX: number, clientY: number) => {
     const img = imgRef.current;
@@ -352,17 +381,69 @@ export function ImageCanvasStage() {
     if (!stroke || !img || !img.complete || img.naturalWidth <= 0) return;
     syncCanvasSize(stroke, { preserve: strokeDirty.current });
     const ctx = stroke.getContext('2d')!;
-    ctx.fillStyle = 'rgba(239, 68, 68, 0.6)';
-    ctx.beginPath();
-    ctx.arc(lx, ly, Math.max(1, brushSize / 2), 0, Math.PI * 2);
-    ctx.fill();
+    const isSketch = paintingTool.current === 'point';
+    const size = isSketch
+      ? useImageStore.getState().sketchBrushSize
+      : useImageStore.getState().brushSize;
+    const radius = Math.max(0.5, size / 2);
+    const color = isSketch
+      ? 'rgba(239, 68, 68, 0.92)'
+      : 'rgba(239, 68, 68, 0.6)';
+
+    if (isSketch) {
+      // Continuous curve while LMB is held (Gemini-style pen).
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = Math.max(1, size);
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      const prev = lastPaint.current;
+      if (prev) {
+        ctx.beginPath();
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(lx, ly);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(lx, ly, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      lastPaint.current = { x: lx, y: ly };
+    } else {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(lx, ly, radius, 0, Math.PI * 2);
+      ctx.fill();
+      // Also connect for smoother brush strokes when pointer moves fast.
+      const prev = lastPaint.current;
+      if (prev) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = Math.max(1, size);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(lx, ly);
+        ctx.stroke();
+      }
+      lastPaint.current = { x: lx, y: ly };
+    }
+
     strokeDirty.current = true;
-    clearHotspots();
+    if (!isSketch) {
+      clearHotspots();
+    } else if (useImageStore.getState().brushRegions.length) {
+      useImageStore.getState().clearBrushRegions();
+      setHasMask(false);
+    }
   };
 
   const finalizeStroke = useCallback(() => {
     const stroke = strokeRef.current;
     const img = imgRef.current;
+    const tool = paintingTool.current;
+    paintingTool.current = null;
+    lastPaint.current = null;
     if (
       !stroke ||
       !img ||
@@ -381,6 +462,24 @@ export function ImageCanvasStage() {
 
     const natW = img.naturalWidth;
     const natH = img.naturalHeight;
+
+    if (tool === 'point') {
+      mergeQueue.current = mergeQueue.current
+        .then(async () => {
+          const mark = await strokeCanvasToSketchMark(snap, natW, natH);
+          if (!mark) return;
+          useImageStore.getState().commitSketchMark({
+            x: mark.cx,
+            y: mark.cy,
+            strokeMaskDataUrl: mark.strokeMaskDataUrl,
+          });
+        })
+        .catch((err) => {
+          console.error('[Aurora] sketch mark failed', err);
+          pushToast('素描标记保存失败，请再试一次', 'error');
+        });
+      return;
+    }
 
     mergeQueue.current = mergeQueue.current
       .then(async () => {
@@ -411,58 +510,53 @@ export function ImageCanvasStage() {
   const onCropImageLoad = (e: SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
     imgRef.current = img;
-    setCropSelection(initCrop(img.width, img.height, cropAspect));
+    markImageReady(img);
+    if (!useImageStore.getState().cropGuideVisible) return;
+    const aspect = resolveCropAspect(cropAspect, img.width, img.height);
+    setCropSelection(initCrop(img.width, img.height, aspect));
   };
 
   if (!currentUrl) return null;
 
-  const onPointClick = (e: MouseEvent) => {
-    if (tab !== 'retouch' || retouchTool !== 'point') return;
-    if (showCompare) setShowCompare(false);
-    const p = toImageCoords(e.clientX, e.clientY);
-    if (!p) return;
-    const img = imgRef.current;
-    const hitRadius = img
-      ? Math.max(18, Math.min(img.naturalWidth, img.naturalHeight) * 0.025)
-      : 28;
-    placeHotspot(p.x, p.y, {
-      additive: e.shiftKey,
-      hitRadius,
-    });
-    const mask = maskRef.current;
-    if (mask) {
-      mask.getContext('2d')!.clearRect(0, 0, mask.width, mask.height);
-    }
-    const stroke = strokeRef.current;
-    if (stroke) {
-      stroke.getContext('2d')!.clearRect(0, 0, stroke.width, stroke.height);
-    }
-    setHasMask(false);
-  };
-
-  const onBrushPointerDown = (e: ReactPointerEvent<HTMLImageElement>) => {
-    if (tab !== 'retouch' || retouchTool !== 'brush') return;
+  const onStrokePointerDown = (e: ReactPointerEvent<HTMLImageElement>) => {
+    if (tab !== 'retouch') return;
+    if (retouchTool !== 'brush' && retouchTool !== 'point') return;
     if (e.button !== 0) return;
     e.preventDefault();
     if (showCompare) setShowCompare(false);
     const p = toImageCoords(e.clientX, e.clientY);
     if (!p) return;
+
     if (e.shiftKey) {
       const img = imgRef.current;
       if (!img || img.naturalWidth <= 0) return;
       void (async () => {
-        const hit = await findBrushRegionAt(
-          useImageStore.getState().brushRegions,
-          p.x,
-          p.y,
-          img.naturalWidth,
-          img.naturalHeight,
-        );
-        if (hit) removeBrushRegion(hit.id);
+        if (retouchTool === 'brush') {
+          const hit = await findBrushRegionAt(
+            useImageStore.getState().brushRegions,
+            p.x,
+            p.y,
+            img.naturalWidth,
+            img.naturalHeight,
+          );
+          if (hit) removeBrushRegion(hit.id);
+        } else {
+          const hitId = await findHotspotSketchAt(
+            useImageStore.getState().hotspots,
+            p.x,
+            p.y,
+            img.naturalWidth,
+            img.naturalHeight,
+          );
+          if (hitId) removeHotspot(hitId);
+        }
       })();
       return;
     }
+
     painting.current = true;
+    paintingTool.current = retouchTool;
+    lastPaint.current = null;
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -471,8 +565,11 @@ export function ImageCanvasStage() {
     paintStrokeAt(p.lx, p.ly);
   };
 
-  const onBrushPointerMove = (e: ReactPointerEvent<HTMLImageElement>) => {
-    if (tab !== 'retouch' || retouchTool !== 'brush') {
+  const onStrokePointerMove = (e: ReactPointerEvent<HTMLImageElement>) => {
+    if (
+      tab !== 'retouch' ||
+      (retouchTool !== 'brush' && retouchTool !== 'point')
+    ) {
       setCursor(null);
       return;
     }
@@ -485,7 +582,7 @@ export function ImageCanvasStage() {
     if (painting.current) paintStrokeAt(p.lx, p.ly);
   };
 
-  const onBrushPointerUp = (e: ReactPointerEvent<HTMLImageElement>) => {
+  const onStrokePointerUp = (e: ReactPointerEvent<HTMLImageElement>) => {
     if (!painting.current) return;
     painting.current = false;
     try {
@@ -512,11 +609,10 @@ export function ImageCanvasStage() {
         markImageReady(e.currentTarget);
         void refreshOverlay();
       }}
-      onClick={tab === 'retouch' && retouchTool === 'point' ? onPointClick : undefined}
-      onPointerDown={onBrushPointerDown}
-      onPointerMove={onBrushPointerMove}
-      onPointerUp={onBrushPointerUp}
-      onPointerCancel={onBrushPointerUp}
+      onPointerDown={onStrokePointerDown}
+      onPointerMove={onStrokePointerMove}
+      onPointerUp={onStrokePointerUp}
+      onPointerCancel={onStrokePointerUp}
       onPointerLeave={() => {
         if (!painting.current) setCursor(null);
       }}
@@ -548,7 +644,10 @@ export function ImageCanvasStage() {
       >
         <div
           className={`img-stage-media${tab === 'crop' ? ' is-cropping' : ''}${
-            tab === 'retouch' && retouchTool === 'brush' ? ' is-brushing' : ''
+            tab === 'retouch' &&
+            (retouchTool === 'brush' || retouchTool === 'point')
+              ? ' is-brushing'
+              : ''
           }`}
         >
           {comparing ? (
@@ -615,11 +714,20 @@ export function ImageCanvasStage() {
           ) : tab === 'crop' ? (
             <ReactCrop
               className="img-react-crop"
-              crop={cropSelection}
-              aspect={cropAspect}
+              crop={cropGuideVisible ? cropSelection : undefined}
+              aspect={
+                cropAspect === 'original'
+                  ? imageSize && imageSize.h > 0
+                    ? imageSize.w / imageSize.h
+                    : undefined
+                  : cropAspect
+              }
               keepSelection
               ruleOfThirds
-              onChange={(c) => setCropSelection(c)}
+              onChange={(c) => {
+                if (!cropGuideVisible) return;
+                setCropSelection(c);
+              }}
             >
               <img
                 src={currentUrl}
@@ -681,14 +789,20 @@ export function ImageCanvasStage() {
                     <span className="img-hotspot-core">{br.n}</span>
                   </span>
                 ))}
-              {cursor && retouchTool === 'brush' && tab === 'retouch' && (
+              {cursor &&
+                (retouchTool === 'brush' || retouchTool === 'point') &&
+                tab === 'retouch' && (
                 <span
-                  className="img-brush-cursor"
+                  className={`img-brush-cursor${
+                    retouchTool === 'point' ? ' is-sketch' : ''
+                  }`}
                   style={{
                     left: cursor.x,
                     top: cursor.y,
-                    width: brushSize,
-                    height: brushSize,
+                    width:
+                      retouchTool === 'point' ? sketchBrushSize : brushSize,
+                    height:
+                      retouchTool === 'point' ? sketchBrushSize : brushSize,
                   }}
                 />
               )}

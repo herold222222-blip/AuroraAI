@@ -69,6 +69,7 @@ export interface ImageProjectBag {
   tab: 'retouch' | 'crop' | 'adjust' | 'filter' | 'style';
   retouchTool: 'select' | 'point' | 'brush' | 'eraser';
   brushSize: number;
+  sketchBrushSize?: number;
   prompt: string;
   materials: { id: string; url: string; selected: boolean }[];
   savedImages: {
@@ -120,6 +121,7 @@ export function emptyImageBag(): ImageProjectBag {
     tab: 'retouch',
     retouchTool: 'select',
     brushSize: 28,
+    sketchBrushSize: 5,
     prompt: '',
     lastGeneratePrompt: null,
     materials: [],

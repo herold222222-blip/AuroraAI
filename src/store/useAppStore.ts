@@ -14,6 +14,7 @@ import type {
   MaterialSwatch,
   EditTool,
   ModelSnapshot,
+  SnapshotCameraPose,
 } from '../types';
 import { uid, newLayerMaterial, MATERIAL_LIBRARY, matchLibrarySwatch, materialFromSwatch, isMeshyModel, DEFAULT_AI_MODEL, resolveAiModel } from '../data/defaultLayers';
 import { runSceneAI } from '../ai/pipeline';
@@ -21,6 +22,7 @@ import { generateFallbackScene } from '../ai/fallback';
 import { buildScene } from '../ai/scene';
 import { useImageStore } from '../image/useImageStore';
 import { createMeshyImageTo3d, pollMeshyImageTo3d } from '../ai/meshyApi';
+import { viewportController } from '../components/workbench/viewportController';
 import {
   cloneGrid,
   cloneLayers,
@@ -112,6 +114,8 @@ interface AppState {
   snapshots: ModelSnapshot[];
   /** snapshot currently enlarged over the viewport (null = show 3D) */
   viewingSnapshotId: string | null;
+  /** snapshot image previewed full-size over the canvas (magnifier) */
+  previewingSnapshotId: string | null;
   /**
    * Snapshot ids handed to the image editor (send order).
    * When set, image sidebar lists these synced model shots.
@@ -194,12 +198,24 @@ interface AppState {
   setEditTool: (tool: EditTool) => void;
   setCameraMode: (on: boolean) => void;
   toggleCameraMode: () => void;
-  addSnapshot: (dataUrl: string) => void;
+  addSnapshot: (dataUrl: string, cameraPose?: SnapshotCameraPose) => void;
   removeSnapshot: (id: string) => void;
   renameSnapshot: (id: string, label: string) => void;
   reorderSnapshots: (fromId: string, toId: string) => void;
   updateSnapshotUrl: (id: string, url: string) => void;
   setViewingSnapshot: (id: string | null) => void;
+  setPreviewingSnapshot: (id: string | null) => void;
+  /** Attach / refresh camera pose on the source-image snapshot (first slot). */
+  attachCameraPoseToSourceSnapshot: (pose: SnapshotCameraPose) => void;
+  /**
+   * Ensure the generating image is the first model snapshot.
+   * Clones blob URLs so later revoke won't break the thumb.
+   */
+  ensureSourceImageSnapshot: (opts?: {
+    url?: string;
+    label?: string;
+    force?: boolean;
+  }) => Promise<void>;
   enterImageModule: () => void;
   enterModelModule: () => void;
   /** Send selected model snapshots into the image editor (single or multi). */
@@ -385,6 +401,7 @@ export const useAppStore = create<AppState>((set, get) => {
       cameraMode: m.cameraMode,
       snapshots: m.snapshots.map((x) => ({ ...x })),
       viewingSnapshotId: m.viewingSnapshotId,
+      previewingSnapshotId: null,
       imageSessionSnapshotIds: m.imageSessionSnapshotIds
         ? [...m.imageSessionSnapshotIds]
         : null,
@@ -435,6 +452,7 @@ export const useAppStore = create<AppState>((set, get) => {
     cameraMode: false,
     snapshots: [],
     viewingSnapshotId: null,
+    previewingSnapshotId: null,
     imageSessionSnapshotIds: null,
     lastModelView: 'upload' as ViewId,
     meshyModelUrl: null,
@@ -534,6 +552,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         imageSessionSnapshotIds: ordered.map((s) => s.id),
         viewingSnapshotId: null,
+        previewingSnapshotId: null,
         lastModelView: cur !== 'image' ? cur : get().lastModelView,
         view: 'image',
         transitionTo: null,
@@ -562,25 +581,13 @@ export const useAppStore = create<AppState>((set, get) => {
           url = useImageStore.getState().currentUrl ?? url;
         }
         let handoff = url;
-        let sourceSnapUrl = url;
         if (url.startsWith('blob:')) {
           try {
             const res = await fetch(url);
             const blob = await res.blob();
             handoff = URL.createObjectURL(blob);
-            // Separate blob so setImage revoke won't break the snapshot.
-            sourceSnapUrl = URL.createObjectURL(blob);
           } catch {
             /* keep original */
-          }
-        } else {
-          // data:/http(s): — clone into a blob snapshot when possible
-          try {
-            const res = await fetch(url);
-            const blob = await res.blob();
-            sourceSnapUrl = URL.createObjectURL(blob);
-          } catch {
-            sourceSnapUrl = url;
           }
         }
 
@@ -588,35 +595,15 @@ export const useAppStore = create<AppState>((set, get) => {
           img.sourceAlbums.find((a) => a.id === img.activeSourceId)?.label ||
           '来源原图';
 
-        const prevSource = get().snapshots.filter((s) => s.fromSourceImage);
-        prevSource.forEach((s) => {
-          if (s.url.startsWith('blob:')) {
-            try {
-              URL.revokeObjectURL(s.url);
-            } catch {
-              /* ignore */
-            }
-          }
-        });
-
-        const sourceShot: ModelSnapshot = {
-          id: uid('snap'),
-          url: sourceSnapUrl,
-          createdAt: Date.now(),
-          label: albumLabel,
-          fromSourceImage: true,
-        };
-
         get().setImage({
           url: handoff,
           name: '图片模块-图生模型.png',
           size: 0,
         });
-        set({
-          snapshots: [
-            sourceShot,
-            ...get().snapshots.filter((s) => !s.fromSourceImage),
-          ],
+        await get().ensureSourceImageSnapshot({
+          url: handoff,
+          label: albumLabel,
+          force: true,
         });
         get().pushToast('已进入图生模型流程，原图已写入模型快照', 'success');
         get().analyze();
@@ -769,8 +756,11 @@ export const useAppStore = create<AppState>((set, get) => {
         void get().runMeshyBuild();
         return;
       }
-      get().setMeshyModelUrl(null);
-      get().startTransition('build', 'workbench3d');
+      void (async () => {
+        await get().ensureSourceImageSnapshot();
+        get().setMeshyModelUrl(null);
+        get().startTransition('build', 'workbench3d');
+      })();
     },
 
     setMeshyModelUrl: (url) => set({ meshyModelUrl: url }),
@@ -781,11 +771,15 @@ export const useAppStore = create<AppState>((set, get) => {
         get().pushToast('请先上传图片', 'info');
         return;
       }
+      await get().ensureSourceImageSnapshot({
+        url: image.url,
+        label: image.name?.replace(/\.[^.]+$/, '') || '来源原图',
+      });
       set({
         view: 'build',
         transitionTo: null,
         aiRunning: true,
-        aiStage: '正在提交 Meshy 任务…',
+        aiStage: '正在提交 Meshy Smart Topology 任务…',
         aiProgress: 0.02,
         aiError: null,
       });
@@ -810,6 +804,7 @@ export const useAppStore = create<AppState>((set, get) => {
           aiStage: '完成',
           view: 'workbench3d',
           transitionTo: null,
+          cameraMode: true,
         });
         get().pushToast('Meshy 三维模型已生成', 'success');
       } catch (err) {
@@ -1499,6 +1494,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         cameraMode: on,
         viewingSnapshotId: on ? get().viewingSnapshotId : null,
+        previewingSnapshotId: on ? get().previewingSnapshotId : null,
       }),
 
     toggleCameraMode: () => {
@@ -1506,16 +1502,18 @@ export const useAppStore = create<AppState>((set, get) => {
       set({
         cameraMode: next,
         viewingSnapshotId: next ? get().viewingSnapshotId : null,
+        previewingSnapshotId: next ? get().previewingSnapshotId : null,
       });
     },
 
-    addSnapshot: (dataUrl) => {
+    addSnapshot: (dataUrl, cameraPose) => {
       const n = get().snapshots.length + 1;
       const shot: ModelSnapshot = {
         id: uid('snap'),
         url: dataUrl,
         createdAt: Date.now(),
         label: `快照 ${n}`,
+        ...(cameraPose ? { cameraPose } : {}),
       };
       set({
         snapshots: [...get().snapshots, shot],
@@ -1527,10 +1525,12 @@ export const useAppStore = create<AppState>((set, get) => {
     removeSnapshot: (id) => {
       const next = get().snapshots.filter((s) => s.id !== id);
       const viewing = get().viewingSnapshotId;
+      const previewing = get().previewingSnapshotId;
       const session = get().imageSessionSnapshotIds;
       set({
         snapshots: next,
         viewingSnapshotId: viewing === id ? null : viewing,
+        previewingSnapshotId: previewing === id ? null : previewing,
         imageSessionSnapshotIds: session
           ? session.filter((x) => x !== id)
           : null,
@@ -1559,7 +1559,79 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ snapshots: list });
     },
 
-    setViewingSnapshot: (id) => set({ viewingSnapshotId: id }),
+    setViewingSnapshot: (id) => {
+      set({ viewingSnapshotId: id });
+      if (!id) return;
+      const shot = get().snapshots.find((s) => s.id === id);
+      if (shot?.cameraPose) {
+        // Defer one frame so the viewport is free of any snapshot preview overlay.
+        requestAnimationFrame(() => {
+          viewportController.setCameraPose(shot.cameraPose!);
+        });
+      }
+    },
+
+    setPreviewingSnapshot: (id) => set({ previewingSnapshotId: id }),
+
+    attachCameraPoseToSourceSnapshot: (pose) => {
+      const list = get().snapshots;
+      const idx = list.findIndex((s) => s.fromSourceImage);
+      if (idx < 0) return;
+      const next = [...list];
+      next[idx] = { ...next[idx], cameraPose: pose };
+      set({ snapshots: next });
+    },
+
+    ensureSourceImageSnapshot: async (opts) => {
+      const imageUrl = opts?.url ?? get().image?.url;
+      if (!imageUrl) return;
+      if (!opts?.force && get().snapshots.some((s) => s.fromSourceImage)) {
+        return;
+      }
+
+      let sourceSnapUrl = imageUrl;
+      try {
+        const res = await fetch(imageUrl);
+        const blob = await res.blob();
+        sourceSnapUrl = URL.createObjectURL(blob);
+      } catch {
+        sourceSnapUrl = imageUrl;
+      }
+
+      const prevSource = get().snapshots.filter((s) => s.fromSourceImage);
+      prevSource.forEach((s) => {
+        if (s.url.startsWith('blob:') && s.url !== sourceSnapUrl) {
+          try {
+            URL.revokeObjectURL(s.url);
+          } catch {
+            /* ignore */
+          }
+        }
+      });
+
+      const label =
+        opts?.label?.trim() ||
+        get().image?.name?.replace(/\.[^.]+$/, '') ||
+        '来源原图';
+
+      const keptPose = prevSource[0]?.cameraPose;
+      const sourceShot: ModelSnapshot = {
+        id: uid('snap'),
+        url: sourceSnapUrl,
+        createdAt: Date.now(),
+        label,
+        fromSourceImage: true,
+        ...(keptPose && !opts?.force ? { cameraPose: keptPose } : {}),
+      };
+
+      set({
+        snapshots: [
+          sourceShot,
+          ...get().snapshots.filter((s) => !s.fromSourceImage),
+        ],
+        cameraMode: true,
+      });
+    },
 
     updateSnapshotUrl: (id, url) => {
       set({

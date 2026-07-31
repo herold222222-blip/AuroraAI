@@ -25,7 +25,9 @@ export async function createMeshyImageTo3d(opts: {
       enablePbr: Boolean(opts.enablePbr),
       shouldTexture: true,
       textureResolution: opts.textureQuality === '4K' ? '4k' : '2k',
-      aiModel: 'latest',
+      // Smart Topology: cleaner mesh + natively separated parts
+      modelType: 'smart-topology',
+      aiModel: 'meshy-t2',
     }),
   });
   const data = (await res.json().catch(() => ({}))) as {

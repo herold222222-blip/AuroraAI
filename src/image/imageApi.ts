@@ -1,7 +1,7 @@
 export interface ImageEditPayload {
   imageDataUrl: string;
   prompt: string;
-  mode?: 'global' | 'hotspot' | 'mask';
+  mode?: 'global' | 'hotspot' | 'mask' | 'sketch';
   hotspot?: { x: number; y: number };
   maskDataUrl?: string;
   materialRefs?: string[];

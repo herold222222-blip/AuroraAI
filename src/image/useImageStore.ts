@@ -1,4 +1,4 @@
-﻿import { create } from 'zustand';
+import { create } from 'zustand';
 import type { Crop } from 'react-image-crop';
 import { compressDataUrl } from './padImage';
 import {
@@ -18,6 +18,32 @@ export type ImageEditorTab =
 
 export type RetouchTool = 'select' | 'point' | 'brush' | 'eraser';
 
+/** Crop lock mode: free, fixed ratios, or match the current image. */
+export type CropAspect = number | undefined | 'original';
+
+/** Resolve store crop mode to a numeric aspect for react-image-crop. */
+export function resolveCropAspect(
+  mode: CropAspect,
+  imgW: number,
+  imgH: number,
+): number | undefined {
+  if (mode === 'original') {
+    if (imgW <= 0 || imgH <= 0) return undefined;
+    return imgW / imgH;
+  }
+  return mode;
+}
+
+/** Repair labels corrupted by a past non-UTF8 file write (`??? 1` → `结果 1`). */
+export function repairImageLabel(
+  label: string,
+  kind: 'result' | 'album' = 'result',
+): string {
+  const m = label.match(/^[\uFFFD?]+\s*(\d+)$/);
+  if (!m) return label;
+  return kind === 'album' ? `原图 ${m[1]}` : `结果 ${m[1]}`;
+}
+
 export interface HotspotPoint {
   id: string;
   /** 1-based display number, always contiguous after edits */
@@ -25,6 +51,8 @@ export interface HotspotPoint {
   x: number;
   y: number;
   prompt: string;
+  /** Natural-res white/black PNG of the freehand sketch stroke (Gemini-style mark). */
+  strokeMaskDataUrl?: string;
 }
 
 /** Independent connected brush region */
@@ -92,7 +120,13 @@ function saveStyles(list: CustomStyle[]) {
   try {
     localStorage.setItem(CUSTOM_STYLE_KEY, JSON.stringify(list));
   } catch {
-    /* quota */
+    try {
+      // Refs can blow localStorage quota ? persist metadata only.
+      const slim = list.map((s) => ({ ...s, refs: [] as string[] }));
+      localStorage.setItem(CUSTOM_STYLE_KEY, JSON.stringify(slim));
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -170,6 +204,8 @@ interface ImageState {
   tab: ImageEditorTab;
   retouchTool: RetouchTool;
   brushSize: number;
+  /** Pen width for sketch marks (Gemini-style freehand). */
+  sketchBrushSize: number;
   /** Multi-point selection for local retouch (numbered). */
   hotspots: HotspotPoint[];
   /** Independent brush stroke regions (numbered). */
@@ -178,8 +214,10 @@ interface ImageState {
   busy: boolean;
   prompt: string;
 
-  cropAspect: number | undefined;
+  cropAspect: CropAspect;
   cropSelection: Crop | undefined;
+  /** When false, crop tab hides the selection frame (toggle via ratio presets). */
+  cropGuideVisible: boolean;
 
   materials: MaterialItem[];
   materialDrawerOpen: boolean;
@@ -207,12 +245,20 @@ interface ImageState {
   setTab: (t: ImageEditorTab) => void;
   setRetouchTool: (t: RetouchTool) => void;
   setBrushSize: (n: number) => void;
+  setSketchBrushSize: (n: number) => void;
   /** Click canvas: additive=Shift add; clicking near existing removes it; else replace with one */
   placeHotspot: (
     x: number,
     y: number,
     opts?: { additive?: boolean; hitRadius?: number },
   ) => void;
+  /** Append a Gemini-style freehand sketch mark (always multi-mark). */
+  commitSketchMark: (mark: {
+    x: number;
+    y: number;
+    strokeMaskDataUrl: string;
+    prompt?: string;
+  }) => void;
   removeHotspot: (id: string) => void;
   undoLastHotspot: () => void;
   clearHotspots: () => void;
@@ -238,8 +284,11 @@ interface ImageState {
   getWorkingImageUrl: () => Promise<string | null>;
   setSidebarTab: (t: 'snapshots' | 'saved') => void;
   setShowCompare: (v: boolean) => void;
-  setCropAspect: (a: number | undefined) => void;
+  setCropAspect: (a: CropAspect) => void;
   setCropSelection: (c: Crop | undefined) => void;
+  setCropGuideVisible: (v: boolean) => void;
+  /** Toggle crop frame; switch aspect when showing a different ratio. */
+  toggleCropGuide: (aspect: CropAspect) => void;
 
   openFromUrl: (url: string, opts?: { snapshotId?: string; label?: string }) => void;
   /** Import one or more model snapshots as 原图 albums; focus the first. */
@@ -307,14 +356,16 @@ export const useImageStore = create<ImageState>((set, get) => ({
   tab: 'retouch',
   retouchTool: 'select',
   brushSize: 28,
+  sketchBrushSize: 5,
   hotspots: [],
   brushRegions: [],
   hasMask: false,
   busy: false,
   prompt: '',
 
-  cropAspect: undefined,
+  cropAspect: 'original',
   cropSelection: undefined,
+  cropGuideVisible: true,
 
   materials: [],
   materialDrawerOpen: false,
@@ -338,7 +389,11 @@ export const useImageStore = create<ImageState>((set, get) => ({
     set({
       tab: t,
       ...(t === 'crop'
-        ? { cropSelection: undefined, showCompare: false }
+        ? {
+            cropSelection: undefined,
+            cropGuideVisible: true,
+            showCompare: false,
+          }
         : {}),
     }),
   setRetouchTool: (t) =>
@@ -348,6 +403,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       ...(t === 'point' || t === 'brush' ? { showCompare: false } : {}),
     }),
   setBrushSize: (n) => set({ brushSize: n }),
+  setSketchBrushSize: (n) => set({ sketchBrushSize: Math.max(1, Math.min(100, n)) }),
 
   placeHotspot: (x, y, opts) => {
     const list = get().hotspots;
@@ -382,6 +438,22 @@ export const useImageStore = create<ImageState>((set, get) => ({
         brushRegions: [],
       });
     }
+  },
+
+  commitSketchMark: (mark) => {
+    const point: HotspotPoint = {
+      id: uid('hp'),
+      n: 0,
+      x: mark.x,
+      y: mark.y,
+      prompt: mark.prompt || '',
+      strokeMaskDataUrl: mark.strokeMaskDataUrl,
+    };
+    set({
+      hotspots: renumber([...get().hotspots, point]),
+      hasMask: false,
+      brushRegions: [],
+    });
   },
 
   removeHotspot: (id) =>
@@ -523,8 +595,33 @@ export const useImageStore = create<ImageState>((set, get) => ({
 
   setSidebarTab: (t) => set({ sidebarTab: t }),
   setShowCompare: (v) => set({ showCompare: v }),
-  setCropAspect: (a) => set({ cropAspect: a, cropSelection: undefined }),
+  setCropAspect: (a) =>
+    set({ cropAspect: a, cropSelection: undefined, cropGuideVisible: true }),
   setCropSelection: (c) => set({ cropSelection: c }),
+  setCropGuideVisible: (v) =>
+    set(
+      v
+        ? { cropGuideVisible: true }
+        : { cropGuideVisible: false, cropSelection: undefined },
+    ),
+  toggleCropGuide: (aspect) => {
+    const { cropAspect, cropGuideVisible } = get();
+    const same = aspect === cropAspect;
+    // Click active ratio again ? hide frame; otherwise show (and switch ratio if needed).
+    if (same && cropGuideVisible) {
+      set({ cropGuideVisible: false, cropSelection: undefined });
+      return;
+    }
+    if (!same) {
+      set({
+        cropAspect: aspect,
+        cropSelection: undefined,
+        cropGuideVisible: true,
+      });
+      return;
+    }
+    set({ cropGuideVisible: true });
+  },
 
   openFromUrl: (url, opts) => {
     // Model snapshot → treat as 原图 album with generation history.
@@ -565,7 +662,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       lastGeneratePrompt: null,
       tab: 'retouch',
       cropSelection: undefined,
-      cropAspect: undefined,
+      cropAspect: 'original',
       overlays: [],
       selectedOverlayId: null,
       savedImages: [],
@@ -620,7 +717,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       lastGeneratePrompt: null,
       tab: 'retouch',
       cropSelection: undefined,
-      cropAspect: undefined,
+      cropAspect: 'original',
       overlays: [],
       selectedOverlayId: null,
     });
@@ -789,7 +886,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       lastGeneratePrompt: null,
       busy: false,
       cropSelection: undefined,
-      cropAspect: undefined,
+      cropAspect: 'original',
       savedImages: [],
       overlays: [],
       selectedOverlayId: null,
@@ -927,19 +1024,30 @@ export const useImageStore = create<ImageState>((set, get) => ({
 
   upsertCustomStyle: (style) => {
     const list = [...get().customStyles];
-    if (style.id) {
-      const i = list.findIndex((s) => s.id === style.id);
-      if (i >= 0) list[i] = { ...list[i], ...style, id: style.id };
+    let id = style.id;
+    const refs = (style.refs || []).slice(0, 50);
+    if (id) {
+      const i = list.findIndex((s) => s.id === id);
+      if (i >= 0) {
+        list[i] = {
+          ...list[i],
+          name: style.name,
+          prompt: style.prompt,
+          refs,
+          id,
+        };
+      }
     } else {
+      id = uid('style');
       list.push({
-        id: uid('style'),
+        id,
         name: style.name,
         prompt: style.prompt,
-        refs: style.refs,
+        refs,
       });
     }
     saveStyles(list);
-    set({ customStyles: list });
+    set({ customStyles: list, selectedStyleId: id });
   },
 
   removeCustomStyle: (id) => {
@@ -1017,6 +1125,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       tab: s.tab,
       retouchTool: s.retouchTool,
       brushSize: s.brushSize,
+      sketchBrushSize: s.sketchBrushSize,
       prompt: s.prompt,
       lastGeneratePrompt: s.lastGeneratePrompt,
       materials: s.materials.map((m) => ({ ...m })),
@@ -1061,6 +1170,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       tab: bag.tab,
       retouchTool: bag.retouchTool,
       brushSize: bag.brushSize,
+      sketchBrushSize: bag.sketchBrushSize ?? 5,
       prompt: bag.prompt,
       lastGeneratePrompt: bag.lastGeneratePrompt ?? null,
       materials: bag.materials.map((m) => ({ ...m })),
@@ -1079,8 +1189,9 @@ export const useImageStore = create<ImageState>((set, get) => ({
       brushRegions: [],
       hasMask: false,
       busy: false,
-      cropAspect: undefined,
+      cropAspect: 'original',
       cropSelection: undefined,
+      cropGuideVisible: true,
       overlays: [],
       selectedOverlayId: null,
       materialDrawerOpen: false,

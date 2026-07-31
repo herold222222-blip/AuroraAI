@@ -42,13 +42,17 @@ export function createApiApp() {
         enablePbr,
         shouldTexture,
         textureResolution,
+        modelType,
         aiModel,
+        targetPolycount,
       } = req.body as {
         imageDataUrl?: string;
         enablePbr?: boolean;
         shouldTexture?: boolean;
         textureResolution?: '2k' | '4k' | '8k';
+        modelType?: 'standard' | 'smart-topology';
         aiModel?: string;
+        targetPolycount?: number;
       };
       if (!imageDataUrl) {
         res.status(400).json({ error: 'imageDataUrl 必填' });
@@ -59,7 +63,9 @@ export function createApiApp() {
         enablePbr,
         shouldTexture,
         textureResolution,
+        modelType,
         aiModel,
+        targetPolycount,
       });
       res.json(result);
     } catch (err) {

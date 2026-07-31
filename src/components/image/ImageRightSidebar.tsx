@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { InlineRename } from '../common/InlineRename';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { useAppStore } from '../../store/useAppStore';
-import { useImageStore } from '../../image/useImageStore';
+import { useImageStore, repairImageLabel } from '../../image/useImageStore';
 import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import { downloadImages } from '../../utils/downloadImage';
 import { formatDateTime } from '../../utils/formatDateTime';
@@ -36,6 +36,32 @@ export function ImageRightSidebar() {
   );
   const overwriteSnapshot = useImageStore((s) => s.overwriteSnapshot);
   const openFromUrl = useImageStore((s) => s.openFromUrl);
+
+  // Heal labels corrupted by a past non-UTF8 write (`??? 1` → `结果 1`).
+  useEffect(() => {
+    const state = useImageStore.getState();
+    let dirty = false;
+    const savedImages = state.savedImages.map((x) => {
+      const label = repairImageLabel(x.label, 'result');
+      if (label !== x.label) dirty = true;
+      return label === x.label ? x : { ...x, label };
+    });
+    const sourceAlbums = state.sourceAlbums.map((a) => {
+      const label = repairImageLabel(a.label, 'album');
+      const results = a.results.map((r) => {
+        const rl = repairImageLabel(r.label, 'result');
+        if (rl !== r.label) dirty = true;
+        return rl === r.label ? r : { ...r, label: rl };
+      });
+      if (label !== a.label) dirty = true;
+      return label === a.label && results === a.results
+        ? a
+        : { ...a, label, results };
+    });
+    if (dirty) {
+      useImageStore.setState({ savedImages, sourceAlbums });
+    }
+  }, []);
 
   const [confirmAlbumId, setConfirmAlbumId] = useState<string | null>(null);
   const [confirmResultId, setConfirmResultId] = useState<string | null>(null);
@@ -272,7 +298,11 @@ export function ImageRightSidebar() {
               <img src={originalUrl} alt="原图" />
             </button>
             <div className="img-side-label">
-              {activeAlbum?.label || (fromSnapshot ? '快照' : '原图')}
+              {activeAlbum
+                ? repairImageLabel(activeAlbum.label, 'album')
+                : fromSnapshot
+                  ? '快照'
+                  : '原图'}
             </div>
           </div>
           {activeAlbum && activeAlbum.createdAt > 0 && (
@@ -386,7 +416,7 @@ export function ImageRightSidebar() {
                   <div className="img-side-album-caption">
                     <div className="img-side-meta-row">
                       <InlineRename
-                        value={a.label}
+                        value={repairImageLabel(a.label, 'album')}
                         onChange={(name) => renameSourceAlbum(a.id, name)}
                       />
                       {a.createdAt > 0 && (
@@ -429,7 +459,7 @@ export function ImageRightSidebar() {
                 <button
                   type="button"
                   className={resultViewMode === 'list' ? 'is-active' : ''}
-                  title="列表模式（小图，同屏更多）"
+                  title="列表模式（横向卡片）"
                   aria-pressed={resultViewMode === 'list'}
                   onClick={() => setResultViewMode('list')}
                 >
@@ -463,7 +493,7 @@ export function ImageRightSidebar() {
                   <div className="img-side-result-caption">
                     <div className="img-side-meta-row">
                       <InlineRename
-                        value={s.label}
+                        value={repairImageLabel(s.label, 'result')}
                         onChange={(name) => renameSavedImage(s.id, name)}
                       />
                       {s.createdAt > 0 && (

@@ -3,17 +3,16 @@ import {
   padToSupportedRatio,
 } from './padImage';
 import { requestImageEdit, type ImageEditPayload } from './imageApi';
-import { useImageStore } from './useImageStore';
+import { useImageStore, type HotspotPoint } from './useImageStore';
 import {
   dataUrlToBinaryMask,
   maskCentroid,
 } from './brushRegions';
 import {
-  compositeHotspotLocal,
   compositeLocalStrict,
-  hotspotRoiAlpha,
   padMaskToCanvas,
 } from './localComposite';
+import { bakeSketchMarksOntoImage } from './bakeSketchMarks';
 
 const LOCAL_SYSTEM = `CRITICAL LOCAL EDIT CONSTRAINTS (must obey strictly):
 1. You may change ONLY the region indicated by the mask and/or hotspot.
@@ -23,15 +22,17 @@ const LOCAL_SYSTEM = `CRITICAL LOCAL EDIT CONSTRAINTS (must obey strictly):
 5. Prefer seamless blending only at the boundary of the allowed region.
 6. This may be one step in a sequence of brush/mask edits — never drift prior edits or global look.`;
 
-const HOTSPOT_SYSTEM = `CRITICAL HOTSPOT OBJECT EDIT (must obey strictly):
-1. Identify the single real-world object / material / component under the click point
-   (e.g. door, window, chair, planter, tree, facade panel, railing, pavement patch, cushion).
-2. Apply the user instruction ONLY to that object (and its immediate attached material).
-3. Do NOT change neighboring objects, background, sky, global lighting, color grade, or camera.
-4. Preserve exact geometry, edges, and silhouettes of unselected elements.
-5. Keep full-frame size identical. Blend seamlessly only at the object boundary.
-6. If the instruction is a material/color swap, replace that object's surface convincingly
-   while matching the scene's existing light direction and contact shadows.`;
+/** Matches Gemini app sketch/markup editing: ink is on the photo. */
+const SKETCH_MARKUP_SYSTEM = `GEMINI-STYLE SKETCH / MARKUP EDIT (must obey strictly):
+1. IMAGE 1 is a photo with red freehand sketch strokes and red numbered badges drawn ON TOP of subjects to edit.
+2. Each red number (1, 2, 3, …) identifies a distinct subject / material / component under that mark.
+3. Read EVERY "Mark N: …" instruction and apply it ONLY to the subject indicated by mark N.
+4. When multiple marks exist, perform ALL mark edits in a SINGLE coherent pass — do not ignore later marks.
+5. Do NOT change unmarked subjects, background, sky, global lighting, color grade, or camera.
+6. Preserve geometry, edges, and silhouettes of unmarked elements.
+7. CRITICAL: The output image must contain NO red sketch strokes, NO number badges, and NO markup artifacts — remove all annotations completely.
+8. Keep full-frame size identical to the input. Blend edits seamlessly at subject boundaries.
+9. For material/color swaps, match the scene's existing light direction and contact shadows.`;
 
 export async function runAiEdit(opts: {
   prompt: string;
@@ -40,9 +41,17 @@ export async function runAiEdit(opts: {
   /** Override working image (for sequential multi-point). */
   imageUrl?: string;
   /** Override single hotspot (natural coords). */
-  hotspot?: { x: number; y: number } | null;
+  hotspot?: {
+    x: number;
+    y: number;
+    n?: number;
+    prompt?: string;
+    strokeMaskDataUrl?: string;
+  } | null;
   /** Override natural-res mask data URL (white/black). */
   naturalMaskUrl?: string;
+  /** Override material / style reference images (data URLs). */
+  materialRefs?: string[];
   /** Skip reading brush mask / store hotspots; use only overrides. */
   isolated?: boolean;
 }): Promise<string> {
@@ -54,15 +63,10 @@ export async function runAiEdit(opts: {
   const current = working;
   if (!current) throw new Error('没有可编辑的图片');
 
-  const pad = await padToSupportedRatio(current);
-  const size = await loadSize(current);
-
-  let mode: ImageEditPayload['mode'] = 'global';
-  let hotspot: ImageEditPayload['hotspot'];
-  let maskDataUrl: string | undefined;
-  let naturalMaskUrl: string | undefined;
-  let local = false;
-  let hotspotRoi: Awaited<ReturnType<typeof hotspotRoiAlpha>> | null = null;
+  const refs =
+    opts.materialRefs !== undefined
+      ? opts.materialRefs
+      : state.selectedMaterialUrls();
 
   const overrideHotspot =
     opts.hotspot !== undefined ? opts.hotspot : null;
@@ -71,6 +75,29 @@ export async function runAiEdit(opts: {
       ? state.hotspots[0]
       : null;
   const activeHotspot = overrideHotspot ?? useStoreHotspot;
+
+  // Sketch marks → Gemini markup path (ink baked onto the photo).
+  if (!opts.forceGlobal && activeHotspot) {
+    const mark: HotspotPoint = {
+      id: 'tmp',
+      n: activeHotspot.n ?? useStoreHotspot?.n ?? 1,
+      x: activeHotspot.x,
+      y: activeHotspot.y,
+      prompt: (activeHotspot.prompt ?? opts.prompt).trim(),
+      strokeMaskDataUrl: activeHotspot.strokeMaskDataUrl,
+    };
+    if (!mark.prompt) throw new Error('请填写素描标记的修改要求');
+    return runSketchMarkupEdit(current, [mark], refs, opts.systemHint);
+  }
+
+  const pad = await padToSupportedRatio(current);
+  const size = await loadSize(current);
+
+  let mode: ImageEditPayload['mode'] = 'global';
+  let hotspot: ImageEditPayload['hotspot'];
+  let maskDataUrl: string | undefined;
+  let naturalMaskUrl: string | undefined;
+  let local = false;
 
   if (opts.naturalMaskUrl) {
     naturalMaskUrl = opts.naturalMaskUrl;
@@ -93,26 +120,10 @@ export async function runAiEdit(opts: {
   ) {
     // Never silently fall through to global edit when multiple brush regions exist.
     throw new Error('存在多个涂抹区域，请在各区域填写要求后点「应用」');
-  } else if (!opts.forceGlobal && activeHotspot) {
-    // Hotspot: send ROI mask + focus point so iterative edits stay locked to the click.
-    // Soft alpha is still used client-side for seamless composite.
-    hotspotRoi = await hotspotRoiAlpha(
-      current,
-      activeHotspot.x,
-      activeHotspot.y,
-    );
-    naturalMaskUrl = hotspotRoi.maskDataUrl;
-    maskDataUrl = await padMaskToCanvas(naturalMaskUrl, pad);
-    hotspot = pad.mapPoint(activeHotspot.x, activeHotspot.y);
-    mode = 'hotspot';
-    local = true;
   }
 
   if (local && mode === 'mask' && !maskDataUrl) {
-    throw new Error('局部编辑需要有效的点选或涂抹区域');
-  }
-  if (local && mode === 'hotspot' && !hotspot) {
-    throw new Error('点选编辑需要有效的选点坐标');
+    throw new Error('局部编辑需要有效的素描标记或涂抹区域');
   }
 
   // Brush/mask: send region centroid as focus so Gemini stays locked across iterative edits.
@@ -126,20 +137,14 @@ export async function runAiEdit(opts: {
     }
   }
 
-  const isHotspot = mode === 'hotspot';
   const systemHint = local
-    ? [isHotspot ? HOTSPOT_SYSTEM : LOCAL_SYSTEM, opts.systemHint]
-        .filter(Boolean)
-        .join('\n\n')
+    ? [LOCAL_SYSTEM, opts.systemHint].filter(Boolean).join('\n\n')
     : opts.systemHint;
 
-  const userPrompt = isHotspot
-    ? `Edit the clicked object only.\nUser request: ${opts.prompt}`
-    : local
-      ? `LOCAL EDIT ONLY — apply this change exclusively inside the allowed region:\n${opts.prompt}`
-      : opts.prompt;
+  const userPrompt = local
+    ? `LOCAL EDIT ONLY — apply this change exclusively inside the allowed region:\n${opts.prompt}`
+    : opts.prompt;
 
-  const refs = state.selectedMaterialUrls();
   const result = await requestImageEdit({
     imageDataUrl: pad.dataUrl,
     prompt: userPrompt,
@@ -159,41 +164,87 @@ export async function runAiEdit(opts: {
     size.h,
   );
 
-  if (local && hotspotRoi) {
-    return compositeHotspotLocal(
-      current,
-      cropped,
-      hotspotRoi.alpha,
-      hotspotRoi.w,
-      hotspotRoi.h,
-    );
-  }
   if (local && naturalMaskUrl) {
     return compositeLocalStrict(current, cropped, naturalMaskUrl);
   }
   return cropped;
 }
 
-/** Apply each numbered hotspot prompt sequentially on the same image. */
-export async function runMultiHotspotEdits(): Promise<string> {
-  const state = useImageStore.getState();
-  const start = state.currentUrl;
-  if (!start) throw new Error('没有可编辑的图片');
-  const points = state.hotspots.filter((p) => p.prompt.trim());
+/**
+ * Gemini-style sketch edit: bake red numbered marks onto the photo,
+ * send one request with all Mark N instructions, return a clean full frame.
+ */
+export async function runSketchMarkupEdit(
+  imageUrl: string,
+  marks: HotspotPoint[],
+  materialRefs?: string[],
+  systemHint?: string,
+): Promise<string> {
+  const points = marks.filter((p) => p.prompt.trim());
   if (!points.length) {
     throw new Error('请至少在一个编号对话框中填写修改要求');
   }
 
-  let current = start;
-  for (const p of points) {
-    current = await runAiEdit({
-      prompt: p.prompt.trim(),
-      imageUrl: current,
-      hotspot: { x: p.x, y: p.y },
-      isolated: true,
-    });
-  }
-  return current;
+  const annotated = await bakeSketchMarksOntoImage(
+    imageUrl,
+    points.map((p) => ({
+      n: p.n,
+      x: p.x,
+      y: p.y,
+      strokeMaskDataUrl: p.strokeMaskDataUrl,
+    })),
+  );
+
+  const pad = await padToSupportedRatio(annotated);
+  const size = await loadSize(imageUrl);
+
+  const markLines = points
+    .map((p) => `Mark ${p.n}: ${p.prompt.trim()}`)
+    .join('\n');
+
+  const userPrompt =
+    points.length === 1
+      ? [
+          `The photo has a red sketch mark numbered ${points[0].n} drawn on the subject to edit.`,
+          `Apply the instruction ONLY to that marked subject, then remove all red markup from the output.`,
+          markLines,
+        ].join('\n')
+      : [
+          `The photo has ${points.length} red numbered sketch marks (Gemini markup).`,
+          `Apply EACH Mark N instruction ONLY to the subject under mark N.`,
+          `Perform all mark edits together in one pass.`,
+          `Remove every red stroke and number badge from the final image.`,
+          markLines,
+        ].join('\n');
+
+  const refs =
+    materialRefs ?? useImageStore.getState().selectedMaterialUrls();
+
+  const result = await requestImageEdit({
+    imageDataUrl: pad.dataUrl,
+    prompt: userPrompt,
+    systemHint: [SKETCH_MARKUP_SYSTEM, systemHint].filter(Boolean).join('\n\n'),
+    mode: 'sketch',
+    materialRefs: refs.length ? refs : undefined,
+  });
+
+  return cropFromPadSized(
+    result.imageDataUrl,
+    pad.originalCrop,
+    pad.canvasW,
+    pad.canvasH,
+    size.w,
+    size.h,
+  );
+}
+
+/** Apply all numbered sketch marks in one Gemini markup pass. */
+export async function runMultiHotspotEdits(): Promise<string> {
+  const state = useImageStore.getState();
+  const start =
+    (await state.getWorkingImageUrl()) ?? state.currentUrl;
+  if (!start) throw new Error('没有可编辑的图片');
+  return runSketchMarkupEdit(start, state.hotspots);
 }
 
 /** Apply each numbered brush-region prompt sequentially. */

@@ -190,6 +190,13 @@ export function Viewport3D() {
     controls.dampingFactor = 0.08;
     controls.maxPolarAngle = Math.PI / 2.05;
     controls.target.set(0, 0.5, 0);
+    // Left = select only (custom handlers). Orbit moved to middle; pan stays on right.
+    // -1 disables OrbitControls for that button (falls through to no-op).
+    controls.mouseButtons = {
+      LEFT: -1 as THREE.MOUSE,
+      MIDDLE: THREE.MOUSE.ROTATE,
+      RIGHT: THREE.MOUSE.PAN,
+    };
     controlsRef.current = controls;
 
     const hemi = new THREE.HemisphereLight(0xffffff, 0xdfe6ee, 0.85);
@@ -386,6 +393,7 @@ export function Viewport3D() {
     // Capture phase: enable TransformControls only when clicking axis handles,
     // so empty-canvas clicks never call setPointerCapture (which freezes UI).
     const onDownCapture = (e: PointerEvent) => {
+      if (e.button !== 0) return;
       if (!gizmoArmed || transform.dragging) return;
       setPointer(e);
       raycaster.setFromCamera(pointer, camera);
@@ -402,6 +410,12 @@ export function Viewport3D() {
     const camDir = new THREE.Vector3();
 
     const onDown = (e: PointerEvent) => {
+      // Block browser middle-click autoscroll; orbit is handled by OrbitControls.
+      if (e.button === 1) {
+        e.preventDefault();
+        return;
+      }
+      if (e.button !== 0) return;
       downPos = { x: e.clientX, y: e.clientY };
       if (materialToolRef.current !== 'none') return;
       if (transform.dragging) return;
@@ -536,6 +550,7 @@ export function Viewport3D() {
         return;
       }
 
+      if (e.button !== 0) return;
       if (transform.dragging) return;
 
       // Clear a stuck capture from TransformControls without fighting an active drag.
@@ -560,6 +575,11 @@ export function Viewport3D() {
       }
     };
 
+    const onAuxClick = (e: MouseEvent) => {
+      // Prevent middle-button default (auto-scroll) on the canvas.
+      if (e.button === 1) e.preventDefault();
+    };
+
     const onWindowUp = (e: PointerEvent) => {
       // Only used to recover from a stuck pointer capture; never interrupt drags.
       if (transform.dragging || dragging) return;
@@ -575,6 +595,7 @@ export function Viewport3D() {
     renderer.domElement.addEventListener('pointermove', onMove);
     renderer.domElement.addEventListener('pointerup', onUp);
     renderer.domElement.addEventListener('pointercancel', onWindowUp);
+    renderer.domElement.addEventListener('auxclick', onAuxClick);
     window.addEventListener('pointerup', onWindowUp);
     window.addEventListener('pointercancel', onWindowUp);
 
@@ -609,6 +630,28 @@ export function Viewport3D() {
       controls.target.set(0, 0.5, 0);
       controls.update();
     });
+    viewportController.registerPose(
+      () => ({
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        target: [controls.target.x, controls.target.y, controls.target.z],
+      }),
+      (pose) => {
+        // Kill residual orbit damping so the restored pose sticks.
+        const orbit = controls as OrbitControls & {
+          _sphericalDelta: THREE.Spherical;
+          _panOffset: THREE.Vector3;
+        };
+        orbit._sphericalDelta.set(0, 0, 0);
+        orbit._panOffset.set(0, 0, 0);
+        camera.position.set(
+          pose.position[0],
+          pose.position[1],
+          pose.position[2],
+        );
+        controls.target.set(pose.target[0], pose.target[1], pose.target[2]);
+        controls.update();
+      },
+    );
     viewportController.registerCapture(() => {
       controls.update();
       syncMoveBall();
@@ -668,12 +711,14 @@ export function Viewport3D() {
       cancelAnimationFrame(rafRef.current);
       viewportController.unregister();
       viewportController.unregisterCapture();
+      viewportController.unregisterPose();
       ro.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onDownCapture, true);
       renderer.domElement.removeEventListener('pointerdown', onDown);
       renderer.domElement.removeEventListener('pointermove', onMove);
       renderer.domElement.removeEventListener('pointerup', onUp);
       renderer.domElement.removeEventListener('pointercancel', onWindowUp);
+      renderer.domElement.removeEventListener('auxclick', onAuxClick);
       window.removeEventListener('pointerup', onWindowUp);
       window.removeEventListener('pointercancel', onWindowUp);
       transform.detach();
@@ -839,6 +884,18 @@ export function Viewport3D() {
           );
           controls.target.copy(fitCenter);
           controls.update();
+          useAppStore.getState().attachCameraPoseToSourceSnapshot({
+            position: [
+              camera.position.x,
+              camera.position.y,
+              camera.position.z,
+            ],
+            target: [
+              controls.target.x,
+              controls.target.y,
+              controls.target.z,
+            ],
+          });
         }
         useAppStore.getState().pushToast('Meshy 模型已载入视口', 'success');
       },
