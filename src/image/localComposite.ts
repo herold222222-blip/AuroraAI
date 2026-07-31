@@ -106,7 +106,8 @@ function dilateBinary(
   radius: number,
 ): Uint8Array {
   if (radius <= 0) return mask;
-  const out = new Uint8Array(mask);
+  const out: Uint8Array = new Uint8Array(mask.length);
+  out.set(mask);
   const r2 = radius * radius;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
@@ -314,7 +315,7 @@ export async function sketchRoiAlpha(
   ctx.drawImage(img, 0, 0);
   const { data } = ctx.getImageData(0, 0, w, h);
 
-  let fill = new Uint8Array(w * h);
+  let fill: Uint8Array = new Uint8Array(w * h);
   for (let i = 0, p = 0; i < data.length; i += 4, p++) {
     fill[p] = data[i] > 127 ? 1 : 0;
   }

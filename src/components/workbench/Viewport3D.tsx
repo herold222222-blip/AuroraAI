@@ -637,7 +637,7 @@ export function Viewport3D() {
       }),
       (pose) => {
         // Kill residual orbit damping so the restored pose sticks.
-        const orbit = controls as OrbitControls & {
+        const orbit = controls as unknown as {
           _sphericalDelta: THREE.Spherical;
           _panOffset: THREE.Vector3;
         };
