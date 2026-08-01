@@ -1,4 +1,4 @@
-import { useAppStore } from '../../store/useAppStore';
+import { matchesFilter, useAppStore } from '../../store/useAppStore';
 import { Check } from '../common/Controls';
 import { InlineRename } from '../common/InlineRename';
 
@@ -28,9 +28,7 @@ export function ComponentTree({
   const toggleVisibility = useAppStore((s) => s.toggleVisibility);
   const renameLayer = useAppStore((s) => s.renameLayer);
 
-  const filtered = layers.filter((l) =>
-    filter === 'all' ? true : filter === 'hidden' ? !l.visible : l.dimension === filter,
-  );
+  const filtered = layers.filter((l) => matchesFilter(l, filter));
 
   const isSelected = (id: string) =>
     selectedIds.includes(id) || selectedId === id;
@@ -60,7 +58,7 @@ export function ComponentTree({
                 toggleVisibility(l.id);
               }}
             >
-              {l.visible ? '👁' : '⚊'}
+              {l.visible ? '👁' : '—'}
             </button>
             <div className="layer-main">
               <InlineRename
@@ -68,10 +66,12 @@ export function ComponentTree({
                 value={l.name}
                 onChange={(name) => renameLayer(l.id, name)}
               />
+              <div className="layer-tags">
+                <span className={`dim-tag ${l.dimension === '2D' ? 'd2' : 'd3'}`}>
+                  {l.dimension}
+                </span>
+              </div>
             </div>
-            <span className={`dim-tag ${l.dimension === '2D' ? 'd2' : 'd3'}`}>
-              {l.dimension}
-            </span>
           </div>
         ))
       )}
@@ -99,7 +99,11 @@ export function ComponentTree({
       disabled={checkedIds.size < 2}
       onClick={onMerge}
     >
-      🔗 合并已选{embedded ? '' : '组件'}（{checkedIds.size}）
+      <span className="btn-ico" aria-hidden>
+        🔗
+      </span>
+      合并已选{embedded ? '' : '组件'}
+      {checkedIds.size > 0 ? `（${checkedIds.size}）` : ''}
     </button>
   );
 

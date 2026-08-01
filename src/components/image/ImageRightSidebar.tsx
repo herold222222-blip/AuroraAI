@@ -298,11 +298,19 @@ export function ImageRightSidebar() {
               <img src={originalUrl} alt="原图" />
             </button>
             <div className="img-side-label">
-              {activeAlbum
-                ? repairImageLabel(activeAlbum.label, 'album')
-                : fromSnapshot
-                  ? '快照'
-                  : '原图'}
+              {activeAlbum ? (
+                <InlineRename
+                  value={repairImageLabel(activeAlbum.label, 'album')}
+                  onChange={(name) => renameSourceAlbum(activeAlbum.id, name)}
+                  className="img-side-original-rename"
+                  inputClassName="img-side-original-rename-input"
+                  title="点击修改原图名称"
+                />
+              ) : fromSnapshot ? (
+                '快照'
+              ) : (
+                '原图'
+              )}
             </div>
           </div>
           {activeAlbum && activeAlbum.createdAt > 0 && (
@@ -491,10 +499,12 @@ export function ImageRightSidebar() {
                     <img src={s.url} alt={s.label} />
                   </button>
                   <div className="img-side-result-caption">
-                    <div className="img-side-meta-row">
+                    <div className="img-side-meta-stack">
                       <InlineRename
                         value={repairImageLabel(s.label, 'result')}
                         onChange={(name) => renameSavedImage(s.id, name)}
+                        className="img-side-result-rename"
+                        title="点击修改名称"
                       />
                       {s.createdAt > 0 && (
                         <span

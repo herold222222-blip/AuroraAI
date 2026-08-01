@@ -2,6 +2,10 @@ import { create } from 'zustand';
 import type { Crop } from 'react-image-crop';
 import { compressDataUrl } from './padImage';
 import {
+  DEFAULT_IMAGE_EDIT_MODEL,
+  type ImageEditModelId,
+} from './editModels';
+import {
   flattenOverlaysOntoImage,
   measureSticker,
   type ImageOverlay,
@@ -201,6 +205,10 @@ interface ImageState {
   compareBeforeUrl: string | null;
   showCompare: boolean;
 
+  /** Image generation backend (Banana-gemini / Qwen-Image). */
+  editModel: ImageEditModelId;
+  setEditModel: (id: ImageEditModelId) => void;
+
   tab: ImageEditorTab;
   retouchTool: RetouchTool;
   brushSize: number;
@@ -352,6 +360,9 @@ export const useImageStore = create<ImageState>((set, get) => ({
   sourceSnapshotId: null,
   compareBeforeUrl: null,
   showCompare: false,
+
+  editModel: DEFAULT_IMAGE_EDIT_MODEL,
+  setEditModel: (id) => set({ editModel: id }),
 
   tab: 'retouch',
   retouchTool: 'select',

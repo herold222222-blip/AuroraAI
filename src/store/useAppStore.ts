@@ -10,6 +10,7 @@ import type {
   Dimension,
   MaterialConfig,
   TopologyType,
+  FaceQuality,
   OpRecord,
   MaterialSwatch,
   EditTool,
@@ -48,8 +49,12 @@ const HISTORY_LIMIT = 50;
 
 export type LayerFilter = 'all' | '2D' | '3D' | 'hidden';
 
-export const matchesFilter = (l: Layer, f: LayerFilter): boolean =>
-  f === 'all' ? true : f === 'hidden' ? !l.visible : l.dimension === f;
+export const matchesFilter = (l: Layer, f: LayerFilter): boolean => {
+  if (f === 'all') return true;
+  if (f === 'hidden') return !l.visible;
+  // 2D / 3D: only visible layers in that dimension
+  return l.visible && l.dimension === f;
+};
 
 interface UploadedImage {
   url: string;
@@ -89,6 +94,11 @@ interface AppState {
   aiUsedFallback: boolean;
 
   config: ModelConfig;
+  /**
+   * Face density currently baked into the viewport mesh.
+   * `config.faceQuality` is the pending generation setting until rebuild.
+   */
+  appliedFaceQuality: FaceQuality;
   viewport: ViewportSettings;
   exportSettings: ExportSettings;
 
@@ -389,6 +399,7 @@ export const useAppStore = create<AppState>((set, get) => {
         ...m.config,
         aiModel: resolveAiModel(m.config.aiModel),
       },
+      appliedFaceQuality: m.config.faceQuality ?? 'auto',
       viewport: { ...m.viewport },
       exportSettings: { ...m.exportSettings },
       past: [],
@@ -439,6 +450,7 @@ export const useAppStore = create<AppState>((set, get) => {
     aiError: null,
     aiUsedFallback: false,
     config: { ...DEFAULT_CONFIG },
+    appliedFaceQuality: DEFAULT_CONFIG.faceQuality,
     viewport: { ...DEFAULT_VIEWPORT },
     exportSettings: { ...DEFAULT_EXPORT },
     toasts: [],
@@ -759,6 +771,18 @@ export const useAppStore = create<AppState>((set, get) => {
       void (async () => {
         await get().ensureSourceImageSnapshot();
         get().setMeshyModelUrl(null);
+        // Apply pending generation settings at rebuild time.
+        const topology = get().config.topology ?? 'triangle';
+        const faceQuality = get().config.faceQuality ?? 'auto';
+        set({
+          layers: get().layers.map((l) =>
+            l.topology === topology ? l : { ...l, topology },
+          ),
+          appliedFaceQuality: faceQuality,
+          cameraMode: false,
+          viewingSnapshotId: null,
+          previewingSnapshotId: null,
+        });
         get().startTransition('build', 'workbench3d');
       })();
     },
@@ -804,7 +828,9 @@ export const useAppStore = create<AppState>((set, get) => {
           aiStage: '完成',
           view: 'workbench3d',
           transitionTo: null,
-          cameraMode: true,
+          cameraMode: false,
+          viewingSnapshotId: null,
+          previewingSnapshotId: null,
         });
         get().pushToast('Meshy 三维模型已生成', 'success');
       } catch (err) {
@@ -1563,12 +1589,13 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ viewingSnapshotId: id });
       if (!id) return;
       const shot = get().snapshots.find((s) => s.id === id);
-      if (shot?.cameraPose) {
-        // Defer one frame so the viewport is free of any snapshot preview overlay.
-        requestAnimationFrame(() => {
-          viewportController.setCameraPose(shot.cameraPose!);
-        });
-      }
+      // Defer one frame so the viewport is free of any snapshot preview overlay.
+      requestAnimationFrame(() => {
+        const pose = shot?.cameraPose;
+        if (pose) viewportController.setCameraPose(pose);
+        // No recorded pose (older snapshot): fall back to the default overview.
+        else viewportController.setView('perspective');
+      });
     },
 
     setPreviewingSnapshot: (id) => set({ previewingSnapshotId: id }),
@@ -1577,6 +1604,12 @@ export const useAppStore = create<AppState>((set, get) => {
       const list = get().snapshots;
       const idx = list.findIndex((s) => s.fromSourceImage);
       if (idx < 0) return;
+      const prev = list[idx].cameraPose;
+      const same =
+        prev &&
+        prev.position.every((v, i) => Math.abs(v - pose.position[i]) < 1e-3) &&
+        prev.target.every((v, i) => Math.abs(v - pose.target[i]) < 1e-3);
+      if (same) return;
       const next = [...list];
       next[idx] = { ...next[idx], cameraPose: pose };
       set({ snapshots: next });
@@ -1629,7 +1662,6 @@ export const useAppStore = create<AppState>((set, get) => {
           sourceShot,
           ...get().snapshots.filter((s) => !s.fromSourceImage),
         ],
-        cameraMode: true,
       });
     },
 

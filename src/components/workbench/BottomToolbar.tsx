@@ -139,7 +139,10 @@ export function BottomToolbar({ onSync, onExport }: BottomToolbarProps) {
             aria-haspopup="menu"
             onClick={() => setTopoOpen((v) => !v)}
           >
-            ◈ 重拓扑
+            <span className="btn-ico" aria-hidden>
+              ◈
+            </span>
+            重拓扑
           </button>
           {topoOpen &&
             createPortal(
@@ -198,13 +201,22 @@ export function BottomToolbar({ onSync, onExport }: BottomToolbarProps) {
           title={cameraMode ? '退出相机模式' : '进入相机模式'}
           onClick={() => toggleCameraMode()}
         >
-          📷 相机
+          <span className="btn-ico" aria-hidden>
+            📷
+          </span>
+          相机
         </button>
         <button className="btn ghost sm" onClick={onSync} title="导出至设计软件">
-          📤 导出
+          <span className="btn-ico" aria-hidden>
+            📤
+          </span>
+          导出
         </button>
         <button className="btn green sm" onClick={onExport} title="下载模型文件">
-          ⬇ 下载
+          <span className="btn-ico" aria-hidden>
+            ⬇
+          </span>
+          下载
         </button>
       </div>
     </div>

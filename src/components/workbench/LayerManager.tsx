@@ -8,10 +8,10 @@ import { MergeModal } from './MergeModal';
 import { SplitModal } from './SplitModal';
 
 const FILTERS: { key: LayerFilter; label: string }[] = [
-  { key: 'all', label: '全部图层' },
+  { key: 'all', label: '全部' },
   { key: '3D', label: '3D' },
   { key: '2D', label: '2D' },
-  { key: 'hidden', label: '隐藏图层' },
+  { key: 'hidden', label: '隐藏' },
 ];
 
 export function LayerManager() {
@@ -101,14 +101,21 @@ export function LayerManager() {
             disabled={selectedIds.length < 2}
             onClick={openMerge}
           >
-            🔗 合并（{selectedIds.length}）
+            <span className="btn-ico" aria-hidden>
+              🔗
+            </span>
+            合并
+            {selectedIds.length > 0 ? `（${selectedIds.length}）` : ''}
           </button>
           <button
             className="btn soft sm"
             disabled={selectedIds.length !== 1}
             onClick={openSplit}
           >
-            ✂️ 拆分
+            <span className="btn-ico" aria-hidden>
+              ✂
+            </span>
+            拆分
           </button>
         </div>
 
@@ -135,7 +142,7 @@ export function LayerManager() {
                   toggleVisibility(l.id);
                 }}
               >
-                {l.visible ? '👁' : '⚊'}
+                {l.visible ? '👁' : '—'}
               </button>
               <span className="layer-swatch" style={{ background: l.color }} />
               <div className="layer-main">
@@ -144,27 +151,29 @@ export function LayerManager() {
                   value={l.name}
                   onChange={(name) => renameLayer(l.id, name)}
                 />
+                <div className="layer-tags">
+                  <button
+                    className={`dim-tag clickable ${l.dimension === '2D' ? 'd2' : 'd3'}`}
+                    title="点击切换 2D / 3D 属性"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      flip(l.id, l.dimension);
+                    }}
+                  >
+                    {l.dimension}
+                  </button>
+                  <button
+                    className={`topo-tag clickable ${(l.topology ?? 'triangle') === 'quad' ? 'quad' : 'tri'}`}
+                    title="点击切换拓扑结构（四边面 / 三角面）"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      flipTopology(l.id, l.topology ?? 'triangle');
+                    }}
+                  >
+                    {topoLabel(l.topology ?? 'triangle')}
+                  </button>
+                </div>
               </div>
-              <button
-                className={`dim-tag clickable ${l.dimension === '2D' ? 'd2' : 'd3'}`}
-                title="点击切换 2D / 3D 属性"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  flip(l.id, l.dimension);
-                }}
-              >
-                {l.dimension}
-              </button>
-              <button
-                className={`topo-tag clickable ${(l.topology ?? 'triangle') === 'quad' ? 'quad' : 'tri'}`}
-                title="点击切换拓扑结构（四边面 / 三角面）"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  flipTopology(l.id, l.topology ?? 'triangle');
-                }}
-              >
-                {topoLabel(l.topology ?? 'triangle')}
-              </button>
             </div>
           ))
         )}

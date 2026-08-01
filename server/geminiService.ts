@@ -10,6 +10,8 @@ export interface EditRequest {
   maskDataUrl?: string;
   materialRefs?: string[];
   systemHint?: string;
+  /** banana-gemini | qwen-image — qwen wired when API is provided */
+  model?: string;
 }
 
 function sleep(ms: number) {
@@ -57,7 +59,7 @@ function getClient() {
   });
 }
 
-function buildPrompt(req: EditRequest): string {
+export function buildEditPrompt(req: EditRequest): string {
   const parts: string[] = [];
   if (req.systemHint) parts.push(req.systemHint);
 
@@ -156,13 +158,22 @@ export async function editImage(req: EditRequest): Promise<{
   imageDataUrl: string;
   text?: string;
 }> {
+  const model = req.model || 'banana-gemini';
+  if (model === 'qwen-image') {
+    const { editImageWithQwen } = await import('./qwenService');
+    return editImageWithQwen(req);
+  }
+
   const ai = getClient();
   const { mimeType, base64 } = parseDataUrl(req.imageDataUrl);
 
   const contents: Array<{
     text?: string;
     inlineData?: { mimeType: string; data: string };
-  }> = [{ text: buildPrompt(req) }, { inlineData: { mimeType, data: base64 } }];
+  }> = [
+    { text: buildEditPrompt(req) },
+    { inlineData: { mimeType, data: base64 } },
+  ];
 
   if (
     (req.mode === 'mask' || req.mode === 'hotspot') &&

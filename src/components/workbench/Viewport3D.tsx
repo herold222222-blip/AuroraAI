@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
@@ -7,6 +7,27 @@ import { useAppStore } from '../../store/useAppStore';
 import type { EditTool, Layer, SurfaceMode, ViewportSettings } from '../../types';
 import { viewportController, type CameraView } from './viewportController';
 import { buildMassing } from './buildMassing';
+import {
+  faceWorldArea,
+  formatM2,
+  formatMm,
+  makeFaceHighlightMesh,
+  worldAreaToM2,
+  worldToMm,
+} from './measureUtils';
+
+type MeasureHudState =
+  | {
+      mode: 'measure';
+      points: number;
+      lastMm: number | null;
+      totalMm: number;
+    }
+  | {
+      mode: 'area';
+      faces: number;
+      totalM2: number;
+    };
 
 function tint(hex: string, mode: SurfaceMode): THREE.Color {
   if (mode === 'solid') return new THREE.Color('#f2f4f6');
@@ -112,6 +133,28 @@ function createMoveCenterBall(): THREE.Mesh {
   return ball;
 }
 
+/**
+ * Camera pose reproducing the source photo's viewpoint.
+ * Massing maps image rows to world Z, so the photo view is the straight-on
+ * front view (looking down -Z) framed to the model bounds.
+ */
+function frontFitPose(
+  box: THREE.Box3,
+  aspect: number,
+  fovDeg: number,
+): { position: [number, number, number]; target: [number, number, number] } {
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const halfFov = (fovDeg * Math.PI) / 360;
+  const distV = size.y / 2 / Math.tan(halfFov);
+  const distH = size.x / 2 / (Math.tan(halfFov) * Math.max(0.2, aspect));
+  const dist = Math.max(distV, distH, 1) * 1.2 + size.z / 2;
+  return {
+    position: [center.x, center.y, center.z + dist],
+    target: [center.x, center.y, center.z],
+  };
+}
+
 export function Viewport3D() {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | undefined>(undefined);
@@ -127,7 +170,12 @@ export function Viewport3D() {
   const shadowPlaneRef = useRef<THREE.Mesh | undefined>(undefined);
   const transformRef = useRef<TransformControls | undefined>(undefined);
   const moveBallRef = useRef<THREE.Mesh | undefined>(undefined);
+  const measureGroupRef = useRef<THREE.Group | undefined>(undefined);
+  const clearMeasureRef = useRef<(() => void) | null>(null);
   const rafRef = useRef<number>(0);
+  const [measureHud, setMeasureHud] = useState<MeasureHudState | null>(null);
+  const setMeasureHudRef = useRef(setMeasureHud);
+  setMeasureHudRef.current = setMeasureHud;
 
   const grid = useAppStore((s) => s.grid);
   const layers = useAppStore((s) => s.layers);
@@ -135,7 +183,7 @@ export function Viewport3D() {
   const selectedId = useAppStore((s) => s.selectedLayerId);
   const selectedIds = useAppStore((s) => s.selectedLayerIds);
   const selectLayer = useAppStore((s) => s.selectLayer);
-  const faceQuality = useAppStore((s) => s.config.faceQuality);
+  const faceQuality = useAppStore((s) => s.appliedFaceQuality);
   const meshyModelUrl = useAppStore((s) => s.meshyModelUrl);
   const materialTool = useAppStore((s) => s.materialTool);
   const sampleMaterialFromLayer = useAppStore((s) => s.sampleMaterialFromLayer);
@@ -188,7 +236,9 @@ export function Viewport3D() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.maxPolarAngle = Math.PI / 2.05;
+    // Full spherical orbit (middle-mouse): no ground-plane clamp.
+    controls.minPolarAngle = 0;
+    controls.maxPolarAngle = Math.PI;
     controls.target.set(0, 0.5, 0);
     // Left = select only (custom handlers). Orbit moved to middle; pan stays on right.
     // -1 disables OrbitControls for that button (falls through to no-op).
@@ -243,6 +293,62 @@ export function Viewport3D() {
     const meshyGroup = new THREE.Group();
     scene.add(meshyGroup);
     meshyGroupRef.current = meshyGroup;
+
+    const measureGroup = new THREE.Group();
+    measureGroup.name = 'measureOverlay';
+    scene.add(measureGroup);
+    measureGroupRef.current = measureGroup;
+
+    const measurePts: THREE.Vector3[] = [];
+    let measureTotalMm = 0;
+    const areaFaces = new Map<
+      string,
+      { area: number; mesh: THREE.Mesh }
+    >();
+
+    const disposeObject = (obj: THREE.Object3D) => {
+      obj.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry?.dispose();
+        const m = mesh.material;
+        if (Array.isArray(m)) m.forEach((x) => x.dispose());
+        else (m as THREE.Material)?.dispose();
+      });
+    };
+
+    const clearMeasure = () => {
+      while (measureGroup.children.length) {
+        const child = measureGroup.children[0];
+        measureGroup.remove(child);
+        disposeObject(child);
+      }
+      measurePts.length = 0;
+      measureTotalMm = 0;
+      areaFaces.clear();
+      setMeasureHudRef.current(null);
+    };
+    clearMeasureRef.current = clearMeasure;
+
+    const addMeasureMarker = (p: THREE.Vector3) => {
+      const geo = new THREE.SphereGeometry(0.08, 12, 12);
+      const mat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+      const sphere = new THREE.Mesh(geo, mat);
+      sphere.position.copy(p);
+      sphere.renderOrder = 999;
+      measureGroup.add(sphere);
+    };
+
+    const addMeasureSegment = (a: THREE.Vector3, b: THREE.Vector3) => {
+      const geo = new THREE.BufferGeometry().setFromPoints([a, b]);
+      const mat = new THREE.LineBasicMaterial({
+        color: 0xf59e0b,
+        depthTest: false,
+      });
+      const line = new THREE.Line(geo, mat);
+      line.renderOrder = 999;
+      measureGroup.add(line);
+    };
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
@@ -363,15 +469,44 @@ export function Viewport3D() {
       pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     };
 
+    const pickRoots = (): THREE.Object3D[] => {
+      const roots: THREE.Object3D[] = [];
+      if (group.visible) roots.push(group);
+      if (meshyGroup.visible) roots.push(meshyGroup);
+      return roots;
+    };
+
     const pickLayerId = (): string | null => {
-      const hits = raycaster.intersectObjects(group.children, true);
+      const hits = raycaster.intersectObjects(pickRoots(), true);
       for (const hit of hits) {
+        if ((hit.object as THREE.Mesh).userData?.isMeasureHighlight) continue;
         let obj: THREE.Object3D | null = hit.object;
         while (obj) {
           const id = obj.userData.layerId as string | undefined;
           if (id) return id;
           obj = obj.parent;
         }
+      }
+      return null;
+    };
+
+    const pickFaceHit = (): {
+      mesh: THREE.Mesh;
+      face: THREE.Face;
+      faceIndex: number;
+      point: THREE.Vector3;
+    } | null => {
+      const hits = raycaster.intersectObjects(pickRoots(), true);
+      for (const hit of hits) {
+        const mesh = hit.object as THREE.Mesh;
+        if (!mesh.isMesh || mesh.userData.isMeasureHighlight) continue;
+        if (!hit.face || hit.faceIndex == null) continue;
+        return {
+          mesh,
+          face: hit.face,
+          faceIndex: hit.faceIndex,
+          point: hit.point.clone(),
+        };
       }
       return null;
     };
@@ -419,6 +554,8 @@ export function Viewport3D() {
       downPos = { x: e.clientX, y: e.clientY };
       if (materialToolRef.current !== 'none') return;
       if (transform.dragging) return;
+      // Measure / area tools only act on click-up (no drag).
+      if (toolRef.current === 'measure' || toolRef.current === 'area') return;
 
       setPointer(e);
       raycaster.setFromCamera(pointer, camera);
@@ -564,6 +701,88 @@ export function Viewport3D() {
       raycaster.setFromCamera(pointer, camera);
       if (hitsGizmoHelper() || hitsMoveBall()) return;
 
+      const tool = toolRef.current;
+      if (tool === 'measure') {
+        const faceHit = pickFaceHit();
+        // Prefer surface hit; fall back to ground plane y=0 for empty clicks.
+        let point: THREE.Vector3 | null = faceHit?.point ?? null;
+        if (!point) {
+          const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+          const p = new THREE.Vector3();
+          if (raycaster.ray.intersectPlane(plane, p)) point = p;
+        }
+        if (!point) return;
+        if (measurePts.length > 0) {
+          const prev = measurePts[measurePts.length - 1];
+          const dist = prev.distanceTo(point);
+          const mm = worldToMm(dist);
+          measureTotalMm += mm;
+          addMeasureSegment(prev, point);
+          addMeasureMarker(point);
+          measurePts.push(point.clone());
+          setMeasureHudRef.current({
+            mode: 'measure',
+            points: measurePts.length,
+            lastMm: mm,
+            totalMm: measureTotalMm,
+          });
+        } else {
+          addMeasureMarker(point);
+          measurePts.push(point.clone());
+          setMeasureHudRef.current({
+            mode: 'measure',
+            points: 1,
+            lastMm: null,
+            totalMm: 0,
+          });
+        }
+        return;
+      }
+
+      if (tool === 'area') {
+        const faceHit = pickFaceHit();
+        if (!faceHit) {
+          if (!e.shiftKey) {
+            // Clear area selection on empty click.
+            for (const entry of areaFaces.values()) {
+              measureGroup.remove(entry.mesh);
+              disposeObject(entry.mesh);
+            }
+            areaFaces.clear();
+            setMeasureHudRef.current({ mode: 'area', faces: 0, totalM2: 0 });
+          }
+          return;
+        }
+        const info = faceWorldArea(faceHit.mesh, faceHit.face);
+        if (!info) return;
+        const key = `${faceHit.mesh.uuid}:${faceHit.faceIndex}`;
+        if (!e.shiftKey) {
+          for (const entry of areaFaces.values()) {
+            measureGroup.remove(entry.mesh);
+            disposeObject(entry.mesh);
+          }
+          areaFaces.clear();
+        }
+        if (areaFaces.has(key)) {
+          const prev = areaFaces.get(key)!;
+          measureGroup.remove(prev.mesh);
+          disposeObject(prev.mesh);
+          areaFaces.delete(key);
+        } else {
+          const hl = makeFaceHighlightMesh(info.a, info.b, info.c);
+          measureGroup.add(hl);
+          areaFaces.set(key, { area: info.area, mesh: hl });
+        }
+        let total = 0;
+        for (const entry of areaFaces.values()) total += entry.area;
+        setMeasureHudRef.current({
+          mode: 'area',
+          faces: areaFaces.size,
+          totalM2: worldAreaToM2(total),
+        });
+        return;
+      }
+
       const id = pickLayerId();
       if (id) {
         const matTool = materialToolRef.current;
@@ -616,18 +835,30 @@ export function Viewport3D() {
     animate();
 
     const R = 22;
+    // Drawing map: image ±X → world ±X, image top/bottom → world −Z / +Z.
+    // Top: tiny +Z offset only (not X) so screen axes stay orthographic to the plan —
+    // screen-up ≈ −Z (图面上), screen-right ≈ +X (图面右), with no diagonal twist.
     const VIEWS: Record<CameraView, [number, number, number]> = {
       perspective: [12, 11, 15],
-      top: [0.001, R, 0.001],
+      top: [0, R, 1e-3],
       front: [0, 5, R],
       back: [0, 5, -R],
       left: [-R, 5, 0],
       right: [R, 5, 0],
     };
     viewportController.register((view) => {
+      const orbit = controls as unknown as {
+        _sphericalDelta: THREE.Spherical;
+        _panOffset: THREE.Vector3;
+      };
+      orbit._sphericalDelta.set(0, 0, 0);
+      orbit._panOffset.set(0, 0, 0);
+
       const [x, y, z] = VIEWS[view];
+      camera.up.set(0, 1, 0);
       camera.position.set(x, y, z);
-      controls.target.set(0, 0.5, 0);
+      controls.target.set(0, view === 'top' ? 0 : 0.5, 0);
+      camera.lookAt(controls.target);
       controls.update();
     });
     viewportController.registerPose(
@@ -712,6 +943,9 @@ export function Viewport3D() {
       viewportController.unregister();
       viewportController.unregisterCapture();
       viewportController.unregisterPose();
+      clearMeasure();
+      clearMeasureRef.current = null;
+      measureGroupRef.current = undefined;
       ro.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onDownCapture, true);
       renderer.domElement.removeEventListener('pointerdown', onDown);
@@ -801,6 +1035,20 @@ export function Viewport3D() {
       pivot.add(mesh);
       group.add(pivot);
     }
+
+    // Locally built massing has no GLB load step, so keep the source snapshot's
+    // camera pose in sync with the front view matching the original photo.
+    const store = useAppStore.getState();
+    const sourceShot = store.snapshots.find((s) => s.fromSourceImage);
+    if (sourceShot && group.children.length) {
+      const fitted = new THREE.Box3().setFromObject(group);
+      const camera = cameraRef.current;
+      if (!fitted.isEmpty() && camera) {
+        store.attachCameraPoseToSourceSnapshot(
+          frontFitPose(fitted, camera.aspect, camera.fov),
+        );
+      }
+    }
   }, [grid, layers, viewport, selectedId, selectedIds, faceQuality, meshyModelUrl]);
 
   useEffect(() => {
@@ -884,18 +1132,12 @@ export function Viewport3D() {
           );
           controls.target.copy(fitCenter);
           controls.update();
-          useAppStore.getState().attachCameraPoseToSourceSnapshot({
-            position: [
-              camera.position.x,
-              camera.position.y,
-              camera.position.z,
-            ],
-            target: [
-              controls.target.x,
-              controls.target.y,
-              controls.target.z,
-            ],
-          });
+          // Source photo maps to the straight-on front view of the generated model.
+          useAppStore
+            .getState()
+            .attachCameraPoseToSourceSnapshot(
+              frontFitPose(fitted, camera.aspect, camera.fov),
+            );
         }
         useAppStore.getState().pushToast('Meshy 模型已载入视口', 'success');
       },
@@ -1017,6 +1259,19 @@ export function Viewport3D() {
     }
   }, [viewport.ambientLight]);
 
+  // Clear measure overlays when leaving measure/area tools (e.g. Esc → select).
+  useEffect(() => {
+    if (editTool !== 'measure' && editTool !== 'area') {
+      clearMeasureRef.current?.();
+    } else if (editTool === 'measure') {
+      clearMeasureRef.current?.();
+      setMeasureHud({ mode: 'measure', points: 0, lastMm: null, totalMm: 0 });
+    } else if (editTool === 'area') {
+      clearMeasureRef.current?.();
+      setMeasureHud({ mode: 'area', faces: 0, totalM2: 0 });
+    }
+  }, [editTool]);
+
   const matClass =
     materialTool === 'eyedropper'
       ? ' tool-eyedropper'
@@ -1030,12 +1285,58 @@ export function Viewport3D() {
         ? ' tool-scale'
         : editTool === 'rotate'
           ? ' tool-rotate'
-          : '';
+          : editTool === 'measure'
+            ? ' tool-measure'
+            : editTool === 'area'
+              ? ' tool-area'
+              : '';
 
   return (
-    <div
-      className={`viewport-gl${matClass}${toolClass}`}
-      ref={mountRef}
-    />
+    <div className={`viewport-gl-wrap${toolClass}`}>
+      <div
+        className={`viewport-gl${matClass}${toolClass}`}
+        ref={mountRef}
+      />
+      {measureHud?.mode === 'measure' && (
+        <div className="measure-hud" role="status">
+          <div className="measure-hud-title">标尺 · mm</div>
+          {measureHud.points === 0 && (
+            <div className="measure-hud-hint">单击放置起点</div>
+          )}
+          {measureHud.points === 1 && (
+            <div className="measure-hud-hint">再单击终点完成一段测距</div>
+          )}
+          {measureHud.lastMm != null && (
+            <div className="measure-hud-row">
+              <span>本段</span>
+              <strong>{formatMm(measureHud.lastMm)}</strong>
+            </div>
+          )}
+          {measureHud.points > 1 && (
+            <div className="measure-hud-row">
+              <span>累计</span>
+              <strong>{formatMm(measureHud.totalMm)}</strong>
+            </div>
+          )}
+          <div className="measure-hud-tip">继续单击可接续测距 · Esc 退出</div>
+        </div>
+      )}
+      {measureHud?.mode === 'area' && (
+        <div className="measure-hud" role="status">
+          <div className="measure-hud-title">面积 · ㎡</div>
+          <div className="measure-hud-row">
+            <span>已选面</span>
+            <strong>{measureHud.faces}</strong>
+          </div>
+          <div className="measure-hud-row">
+            <span>累计面积</span>
+            <strong>{formatM2(measureHud.totalM2)}</strong>
+          </div>
+          <div className="measure-hud-tip">
+            单击选面 · Shift+单击多选/取消 · Esc 退出
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

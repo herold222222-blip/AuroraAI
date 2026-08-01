@@ -56,6 +56,7 @@ export async function runAiEdit(opts: {
   isolated?: boolean;
 }): Promise<string> {
   const state = useImageStore.getState();
+  const editModel = state.editModel ?? 'banana-gemini';
   const working =
     opts.imageUrl ??
     (await state.getWorkingImageUrl()) ??
@@ -153,6 +154,7 @@ export async function runAiEdit(opts: {
     hotspot: local ? hotspot : undefined,
     maskDataUrl,
     materialRefs: refs.length ? refs : undefined,
+    model: editModel,
   });
 
   const cropped = await cropFromPadSized(
@@ -226,6 +228,7 @@ export async function runSketchMarkupEdit(
     systemHint: [SKETCH_MARKUP_SYSTEM, systemHint].filter(Boolean).join('\n\n'),
     mode: 'sketch',
     materialRefs: refs.length ? refs : undefined,
+    model: useImageStore.getState().editModel ?? 'banana-gemini',
   });
 
   return cropFromPadSized(

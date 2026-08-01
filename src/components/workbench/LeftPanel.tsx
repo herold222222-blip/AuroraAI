@@ -4,7 +4,7 @@ import { AI_MODELS, resolveAiModel } from '../../data/defaultLayers';
 import { Check, Switch, Segmented } from '../common/Controls';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { useImageDownloadMenu } from '../common/ImageDownloadContext';
-import type { FaceQuality, TopologyType } from '../../types';
+import type { FaceQuality } from '../../types';
 
 const ACCEPT = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_SIZE = 20 * 1024 * 1024;
@@ -14,11 +14,6 @@ const FACE_OPTIONS: { value: FaceQuality; label: string }[] = [
   { value: 'high', label: '高' },
   { value: 'medium', label: '中' },
   { value: 'low', label: '低' },
-];
-
-const TOPO_OPTIONS: { value: TopologyType; label: string; hint: string }[] = [
-  { value: 'triangle', label: '三角面', hint: '兼容性更好，适合通用导出' },
-  { value: 'quad', label: '四边面', hint: '利于 Rhino / SketchUp 深化' },
 ];
 
 interface LeftPanelProps {
@@ -33,7 +28,6 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
   const resegment = useAppStore((s) => s.resegment);
   const config = useAppStore((s) => s.config);
   const setConfig = useAppStore((s) => s.setConfig);
-  const retopologizeAll = useAppStore((s) => s.retopologizeAll);
   const build3D = useAppStore((s) => s.build3D);
   const pushToast = useAppStore((s) => s.pushToast);
   const openDownloadMenu = useImageDownloadMenu();
@@ -162,41 +156,15 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
                 onChange={(v) => setConfig({ pbr: v })}
               />
             </div>
-            <div className="field cfg-topo" style={{ marginTop: 8 }}>
-              <label className="field-label">拓扑</label>
-              <div className="cfg-topo-list">
-                {TOPO_OPTIONS.map((o) => {
-                  const active = (config.topology ?? 'triangle') === o.value;
-                  return (
-                    <button
-                      key={o.value}
-                      type="button"
-                      className={`topo-option${active ? ' active' : ''}`}
-                      onClick={() => {
-                        if ((config.topology ?? 'triangle') === o.value) return;
-                        retopologizeAll(o.value);
-                      }}
-                    >
-                      <span className="topo-option-main">
-                        <b>{o.label}</b>
-                        {active && <span className="topo-check">✓</span>}
-                      </span>
-                      <span className="topo-option-hint">{o.hint}</span>
-                    </button>
-                  );
-                })}
-              </div>
+            <div className="field" style={{ marginTop: 8 }}>
+              <label className="field-label">面数控制</label>
+              <Segmented
+                className="block"
+                value={config.faceQuality ?? 'auto'}
+                onChange={(v) => setConfig({ faceQuality: v })}
+                options={FACE_OPTIONS}
+              />
             </div>
-            {showRebuild && (
-              <div className="field" style={{ marginTop: 4 }}>
-                <label className="field-label">面数控制</label>
-                <Segmented
-                  value={config.faceQuality ?? 'auto'}
-                  onChange={(v) => setConfig({ faceQuality: v })}
-                  options={FACE_OPTIONS}
-                />
-              </div>
-            )}
           </div>
         </div>
 
@@ -220,7 +188,7 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
               }
               style={{ marginTop: 4 }}
             >
-              🚀 重新构建 3D 模型
+              重新构建 3D 模型
             </button>
           </>
         )}

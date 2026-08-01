@@ -19,15 +19,17 @@ interface SegmentedProps<T extends string> {
   value: T;
   options: { value: T; label: string }[];
   onChange: (v: T) => void;
+  className?: string;
 }
 
 export function Segmented<T extends string>({
   value,
   options,
   onChange,
+  className,
 }: SegmentedProps<T>) {
   return (
-    <div className="segmented">
+    <div className={`segmented${className ? ` ${className}` : ''}`}>
       {options.map((o) => (
         <button
           key={o.value}

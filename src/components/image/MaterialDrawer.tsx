@@ -58,7 +58,9 @@ export function MaterialDrawer() {
         onClick={() => setOpen(!open)}
         title={open ? '收起素材库' : '展开素材库'}
       >
-        {open ? '›' : '‹'}
+        <span className="img-mat-caret" aria-hidden>
+          {open ? '›' : '‹'}
+        </span>
         <span>素材库</span>
       </button>
       {open && (
@@ -76,7 +78,7 @@ export function MaterialDrawer() {
             )}
           </div>
           <p className="img-mat-hint">
-            点击植物 / 人物镂空素材加入画面，拖动移动，滚轮或滑杆缩放。也可上传透明 PNG。
+            点击真实植物 / 人物抠图加入画面，拖动移动，滚轮或滑杆缩放。也可上传透明 PNG。
           </p>
 
           <div className="img-mat-tabs">

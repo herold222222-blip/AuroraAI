@@ -9,7 +9,7 @@ function formatCount(n: number): string {
 export function MeshStatsPanel() {
   const grid = useAppStore((s) => s.grid);
   const layers = useAppStore((s) => s.layers);
-  const faceQuality = useAppStore((s) => s.config.faceQuality);
+  const faceQuality = useAppStore((s) => s.appliedFaceQuality);
 
   const stats = useMemo(() => {
     if (!grid || layers.length === 0) {
@@ -28,10 +28,12 @@ export function MeshStatsPanel() {
     const meshes = buildMassing(grid, layers, faceQuality ?? 'auto');
     let faces = 0;
     let vertices = 0;
-    for (const { positions } of meshes) {
-      // position buffer is non-indexed triangles: 3 floats/vert, 9 floats/face
+    for (const { layer, positions } of meshes) {
+      // Non-indexed triangles: 3 floats/vert, 9 floats/triangle.
+      // Quad topology emits 2 triangles per logical face.
       vertices += positions.length / 3;
-      faces += positions.length / 9;
+      const tris = positions.length / 9;
+      faces += (layer.topology ?? 'triangle') === 'quad' ? tris / 2 : tris;
     }
 
     return {

@@ -132,7 +132,11 @@ export function RightSidebar3D({
               disabled={checkedIds.size < 2}
               onClick={onMerge}
             >
-              🔗 合并已选（{checkedIds.size}）
+              <span className="btn-ico" aria-hidden>
+                🔗
+              </span>
+              合并已选
+              {checkedIds.size > 0 ? `（${checkedIds.size}）` : ''}
             </button>
           }
         >

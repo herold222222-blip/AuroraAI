@@ -19,6 +19,7 @@ import {
   PromptRefZone,
   RefImageLightbox,
 } from './PromptRefAttach';
+import { IMAGE_EDIT_MODELS } from '../../image/editModels';
 
 const MAX_STYLE_REFS = 50;
 const STYLE_REF_API_BUDGET = 4.2 * 1024 * 1024;
@@ -81,6 +82,8 @@ export function ImageBottomControls() {
   const upsertCustomStyle = useImageStore((s) => s.upsertCustomStyle);
   const removeCustomStyle = useImageStore((s) => s.removeCustomStyle);
   const pushToast = useAppStore((s) => s.pushToast);
+  const editModel = useImageStore((s) => s.editModel);
+  const setEditModel = useImageStore((s) => s.setEditModel);
 
   const placeholder = useMemo(() => {
     if (brushRegions.length || hasMask) return '描述要在涂抹区域内修改的内容…';
@@ -161,13 +164,6 @@ export function ImageBottomControls() {
     }
   };
 
-  const retouchHint =
-    brushRegions.length > 0
-      ? '每个独立涂抹区域会编号；橡皮擦可逐个撤销；按住 Shift+左键点击某区域可删除。下方为各区域对应修改要求，点「应用」同步修改。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。'
-      : hotspots.length > 0
-        ? '素描按 Gemini 方式执行：红色编号笔画会画进模型输入图，多个标记一次生成。Shift+点击可删除标记；橡皮擦逐个撤销。下方填写各标记要求后点「应用」。可用 ＋、Ctrl+V 或拖入参考图（最多 5 张）。'
-        : '可以直接输入需求进行全局修改，或用素描标记/涂抹进行局部编辑。素描每次笔画自动编号（Gemini 素描修图）；涂抹不相连区域会自动编号。可用 ＋、Ctrl+V 或拖入图片添加参考图（最多 5 张）。';
-
   return (
     <div className="img-controls">
       <div className="img-tabs">
@@ -186,7 +182,35 @@ export function ImageBottomControls() {
       <div className="img-tab-body">
         {tab === 'retouch' && (
           <div className="img-tab-pane">
-            <p className="img-tab-hint">{retouchHint}</p>
+            <div className="img-model-row">
+              <span className="img-model-label">选择模型</span>
+              <div className="img-model-list" role="radiogroup" aria-label="选择模型">
+                {IMAGE_EDIT_MODELS.map((m) => {
+                  const active = editModel === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      className={`img-model-option${active ? ' active' : ''}${
+                        m.ready ? '' : ' pending'
+                      }`}
+                      title={m.hint}
+                      onClick={() => setEditModel(m.id)}
+                    >
+                      <span className="img-model-option-main">
+                        <b>{m.label}</b>
+                        {active && <span className="img-model-check">✓</span>}
+                      </span>
+                      {!m.ready && (
+                        <span className="img-model-badge">待接入</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {brushRegions.length > 0 ? (
               <PromptRefZone className="img-hotspot-prompts" disabled={busy}>

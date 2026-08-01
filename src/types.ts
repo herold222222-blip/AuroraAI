@@ -11,7 +11,16 @@ export type Dimension = '2D' | '3D';
 export type TopologyType = 'triangle' | 'quad';
 export type TextureQuality = '2K' | '4K';
 export type FaceQuality = 'auto' | 'high' | 'medium' | 'low';
-export type EditTool = 'select' | 'move' | 'rotate' | 'scale';
+export type EditTool =
+  | 'select'
+  | 'move'
+  | 'rotate'
+  | 'scale'
+  | 'measure'
+  | 'area';
+
+/** Scene unit scale: 1 Three.js unit = 1 meter (for measure tools). */
+export const WORLD_UNIT_METERS = 1;
 
 export type SurfaceMode = 'wireframe' | 'solid' | 'shaded' | 'textured';
 

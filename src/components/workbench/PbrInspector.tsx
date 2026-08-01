@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { Modal } from '../common/Modal';
 import { Segmented } from '../common/Controls';
@@ -8,6 +9,10 @@ import {
   matchLibrarySwatch,
   swatchToMaterialConfig,
 } from '../../data/defaultLayers';
+import {
+  CONSTRUCTION_PRACTICES,
+  type ConstructionPracticeId,
+} from '../../data/constructionPractices';
 import type { MaterialConfig, TextureQuality } from '../../types';
 
 const CHANNELS: { key: 'diffuse' | 'normal' | 'roughness' | 'metalness'; label: string }[] = [
@@ -16,6 +21,8 @@ const CHANNELS: { key: 'diffuse' | 'normal' | 'roughness' | 'metalness'; label: 
   { key: 'roughness', label: '粗糙度 Roughness' },
   { key: 'metalness', label: '金属度 Metalness' },
 ];
+
+const PBR_LIBRARY_MODAL_WIDTH = 1080;
 
 export function PbrInspector({
   layerId,
@@ -44,7 +51,7 @@ export function PbrInspector({
       <Modal
         title="🎨 PBR 材质检查器"
         subtitle={`材质库：${librarySwatch.name}`}
-        width={620}
+        width={PBR_LIBRARY_MODAL_WIDTH}
         onClose={onClose}
         footer={
           <>
@@ -58,7 +65,7 @@ export function PbrInspector({
                 onClose();
               }}
             >
-              应用材质
+              应用修改
             </button>
           </>
         }
@@ -71,7 +78,6 @@ export function PbrInspector({
           onResolution={(resolution) =>
             updateLibraryMaterial(librarySwatch.id, { resolution })
           }
-          onToast={pushToast}
         />
       </Modal>
     );
@@ -108,7 +114,7 @@ export function PbrInspector({
               onClose();
             }}
           >
-            应用材质
+            应用修改
           </button>
         </>
       }
@@ -197,83 +203,131 @@ function LibraryEditor({
   onRename,
   onPreset,
   onResolution,
-  onToast,
 }: {
   mat: MaterialConfig;
   swatchId: string;
   onRename: (name: string) => void;
   onPreset: (preset: string) => void;
   onResolution: (resolution: TextureQuality) => void;
-  onToast: (text: string, tone?: 'info' | 'success' | 'error' | 'warning') => void;
 }) {
   void swatchId;
-  return (
-    <>
-      <div className="field pbr-name-field">
-        <label className="field-label">材质名称</label>
-        <InlineRename
-          value={mat.name}
-          className="pbr-mat-name"
-          inputClassName="input pbr-mat-name-input"
-          title="点击修改材质名称（与右侧材质库同步）"
-          onChange={onRename}
-        />
-      </div>
+  const [practiceId, setPracticeId] = useState<ConstructionPracticeId>(
+    CONSTRUCTION_PRACTICES[0].id,
+  );
+  const practice = useMemo(
+    () =>
+      CONSTRUCTION_PRACTICES.find((p) => p.id === practiceId) ??
+      CONSTRUCTION_PRACTICES[0],
+    [practiceId],
+  );
 
-      <div className="pbr-grid">
-        <div className="pbr-channels">
-          {CHANNELS.map((c) => (
-            <div className="pbr-channel" key={c.key}>
-              <div
-                className="pbr-swatch"
-                style={{ background: mat[c.key] }}
-                title={c.label}
-              />
-              <span>{c.label}</span>
-            </div>
-          ))}
+  return (
+    <div className="pbr-library-layout">
+      <div className="pbr-library-main">
+        <div className="field pbr-name-field">
+          <label className="field-label">材质名称</label>
+          <InlineRename
+            value={mat.name}
+            className="pbr-mat-name"
+            inputClassName="input pbr-mat-name-input"
+            title="点击修改材质名称（与右侧材质库同步）"
+            onChange={onRename}
+          />
         </div>
 
-        <div className="pbr-controls">
-          <div className="field">
-            <label className="field-label">材质预设</label>
-            <select
-              className="input"
-              value={
-                MATERIAL_PRESETS.includes(mat.preset)
-                  ? mat.preset
-                  : MATERIAL_PRESETS[0]
-              }
-              onChange={(e) => onPreset(e.target.value)}
-            >
-              {MATERIAL_PRESETS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
+        <div className="pbr-grid">
+          <div className="pbr-channels">
+            {CHANNELS.map((c) => (
+              <div className="pbr-channel" key={c.key}>
+                <div
+                  className="pbr-swatch"
+                  style={{ background: mat[c.key] }}
+                  title={c.label}
+                />
+                <span>{c.label}</span>
+              </div>
+            ))}
           </div>
 
-          <div className="field">
-            <label className="field-label">贴图分辨率</label>
-            <Segmented
-              value={mat.resolution}
-              onChange={onResolution}
-              options={[
-                { value: '2K', label: '2K' },
-                { value: '4K', label: '4K' },
-              ]}
+          <div className="pbr-controls">
+            <div className="field">
+              <label className="field-label">材质预设</label>
+              <select
+                className="input"
+                value={
+                  MATERIAL_PRESETS.includes(mat.preset)
+                    ? mat.preset
+                    : MATERIAL_PRESETS[0]
+                }
+                onChange={(e) => onPreset(e.target.value)}
+              >
+                {MATERIAL_PRESETS.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label className="field-label">贴图分辨率</label>
+              <Segmented
+                value={mat.resolution}
+                onChange={onResolution}
+                options={[
+                  { value: '2K', label: '2K' },
+                  { value: '4K', label: '4K' },
+                ]}
+              />
+            </div>
+
+            <div className="btn dark block pbr-practice-title" aria-hidden="true">
+              工程构造做法
+            </div>
+
+            <div className="field">
+              <select
+                className="input"
+                value={practiceId}
+                onChange={(e) =>
+                  setPracticeId(e.target.value as ConstructionPracticeId)
+                }
+                aria-label="工程构造做法"
+              >
+                {CONSTRUCTION_PRACTICES.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <aside className="pbr-practice-panel" aria-label={`${practice.label}图示`}>
+        <div className="pbr-practice-panel-head">{practice.label}</div>
+        <figure className="pbr-practice-figure">
+          <figcaption>{practice.detailCaption}</figcaption>
+          <div className="pbr-practice-frame">
+            <img
+              src={practice.detailSrc}
+              alt={`${practice.label}构造大样`}
+              draggable={false}
             />
           </div>
-
-          <button
-            className="btn dark block"
-            onClick={() => onToast('AI 正在重绘贴图……', 'info')}
-          >
-            🪄 AI 贴图重绘
-          </button>
-        </div>
-      </div>
-    </>
+        </figure>
+        <figure className="pbr-practice-figure">
+          <figcaption>{practice.diagram3dCaption}</figcaption>
+          <div className="pbr-practice-frame is-3d">
+            <img
+              src={practice.diagram3dSrc}
+              alt={`${practice.label}三维图解`}
+              draggable={false}
+            />
+          </div>
+        </figure>
+      </aside>
+    </div>
   );
 }

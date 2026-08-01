@@ -22,7 +22,9 @@ export function FloatingToolbox({
         disabled={disabled}
         onClick={onSplit}
       >
-        ✂️
+        <span className="ft-ico" aria-hidden>
+          ✂
+        </span>
         <span>拆分</span>
       </button>
       <button
@@ -31,7 +33,9 @@ export function FloatingToolbox({
         disabled={disabled}
         onClick={onMerge}
       >
-        🔗
+        <span className="ft-ico" aria-hidden>
+          🔗
+        </span>
         <span>合并</span>
       </button>
       <button
@@ -40,7 +44,9 @@ export function FloatingToolbox({
         disabled={disabled}
         onClick={onPbr}
       >
-        🎨
+        <span className="ft-ico" aria-hidden>
+          🎨
+        </span>
         <span>材质</span>
       </button>
     </div>

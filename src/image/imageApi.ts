@@ -6,6 +6,8 @@ export interface ImageEditPayload {
   maskDataUrl?: string;
   materialRefs?: string[];
   systemHint?: string;
+  /** Image edit backend: banana-gemini (default) or qwen-image */
+  model?: string;
 }
 
 const NETLIFY_SAFE_BYTES = 5.5 * 1024 * 1024;

@@ -43,13 +43,6 @@ export async function handler(event: {
   }
 
   try {
-    if (!process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      return json(500, {
-        error:
-          '缺少 GEMINI_API_KEY。请在 Netlify → Site configuration → Environment variables 中添加，并 Trigger deploy 重新部署。',
-      });
-    }
-
     const raw = readRawBody(event);
     if (!raw.trim()) {
       return json(400, {
@@ -74,6 +67,26 @@ export async function handler(event: {
     if (!body?.imageDataUrl || !body?.prompt) {
       return json(400, {
         error: `参数不完整：需要 imageDataUrl 与 prompt（收到 keys: ${Object.keys(body || {}).join(',') || '无'}）`,
+      });
+    }
+
+    const useQwen = (body.model || 'banana-gemini') === 'qwen-image';
+    if (useQwen) {
+      const hasQwen = Boolean(
+        process.env.DASHSCOPE_API_KEY ||
+          process.env.QWEN_API_KEY ||
+          process.env.QWEN_IMAGE_API_KEY,
+      );
+      if (!hasQwen) {
+        return json(500, {
+          error:
+            '缺少 DASHSCOPE_API_KEY（千问）。请在 Netlify → Environment variables 中添加并重新部署。',
+        });
+      }
+    } else if (!process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
+      return json(500, {
+        error:
+          '缺少 GEMINI_API_KEY。请在 Netlify → Site configuration → Environment variables 中添加，并 Trigger deploy 重新部署。',
       });
     }
 

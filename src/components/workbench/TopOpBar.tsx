@@ -11,11 +11,20 @@ const TOOLS: { id: OpId; label: string; icon: string; shortcut?: string }[] = [
   { id: 'copy', label: '复制', icon: '⧉', shortcut: 'C' },
   { id: 'scale', label: '缩放', icon: '⤡', shortcut: 'S' },
   { id: 'delete', label: '删除', icon: '🗑', shortcut: 'Del' },
+  { id: 'measure', label: '标尺', icon: '📏', shortcut: 'L' },
+  { id: 'area', label: '面积', icon: '▦', shortcut: 'A' },
   { id: 'undo', label: '撤销', icon: '↶' },
   { id: 'redo', label: '重做', icon: '↷' },
 ];
 
-const MODE_TOOLS: EditTool[] = ['select', 'move', 'rotate', 'scale'];
+const MODE_TOOLS: EditTool[] = [
+  'select',
+  'move',
+  'rotate',
+  'scale',
+  'measure',
+  'area',
+];
 
 export function TopOpBar() {
   const editTool = useAppStore((s) => s.editTool);
@@ -42,6 +51,11 @@ export function TopOpBar() {
   const run = (id: OpId) => {
     if (MODE_TOOLS.includes(id as EditTool)) {
       setEditTool(id as EditTool);
+      if (id === 'measure') {
+        pushToast('标尺：单击两点测距（单位 mm），Esc 清除', 'info');
+      } else if (id === 'area') {
+        pushToast('面积：单击面查看㎡，Shift+单击可多选累加', 'info');
+      }
       return;
     }
     if (id === 'undo') {
@@ -104,6 +118,15 @@ export function TopOpBar() {
         if (e.ctrlKey || e.metaKey) return;
         e.preventDefault();
         setEditTool('scale');
+      } else if (key === 'l' || key === 'L') {
+        e.preventDefault();
+        setEditTool('measure');
+        pushToast('标尺：单击两点测距（单位 mm），Esc 清除', 'info');
+      } else if (key === 'a' || key === 'A') {
+        if (e.ctrlKey || e.metaKey) return;
+        e.preventDefault();
+        setEditTool('area');
+        pushToast('面积：单击面查看㎡，Shift+单击可多选累加', 'info');
       } else if (key === 'Delete' || key === 'Backspace') {
         e.preventDefault();
         const sid = selectedId ?? selectedIds[0];
@@ -131,6 +154,7 @@ export function TopOpBar() {
         const active = isMode && editTool === tool.id;
         return (
           <span key={tool.id} className="top-op-wrap">
+            {tool.id === 'measure' && <span className="tool-divider" />}
             {tool.id === 'undo' && <span className="tool-divider" />}
             <button
               type="button"
@@ -142,11 +166,10 @@ export function TopOpBar() {
               }
               onClick={() => run(tool.id)}
             >
-              <span className="top-op-icon">{tool.icon}</span>
+              <span className="top-op-icon" aria-hidden>
+                {tool.icon}
+              </span>
               <span className="top-op-label">{tool.label}</span>
-              {tool.shortcut && (
-                <span className="top-op-key">{tool.shortcut}</span>
-              )}
             </button>
           </span>
         );

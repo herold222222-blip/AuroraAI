@@ -200,9 +200,6 @@ export function CameraSnapshotPanel() {
                   if (previewingSnapshotId) setPreviewingSnapshot(null);
                   // Always restore this snapshot's camera pose (even if already active).
                   setViewingSnapshot(s.id);
-                  if (!s.cameraPose) {
-                    pushToast('该快照未记录视角，请重新添加快照', 'info');
-                  }
                 }}
                 onContextMenu={(e) => openDownloadMenu(e, s.url, s.label)}
               >

@@ -225,11 +225,13 @@ export function Canvas2D() {
             className={`status-dot${selectedLayers.length ? ' on' : ''}`}
             aria-hidden
           />
-          {selectedLayers.length === 0
-            ? '请在下方画布中点选色块以定义图层（按住 Shift 可多选）'
-            : selectedLayers.length === 1
-              ? `已选择地物图斑：${selectedLayers[0].name}`
-              : `已选择 ${selectedLayers.length} 个图层`}
+          <span className="canvas-status-text">
+            {selectedLayers.length === 0
+              ? '请在下方画布中点选色块以定义图层（按住 Shift 可多选）'
+              : selectedLayers.length === 1
+                ? `已选择地物图斑：${selectedLayers[0].name}`
+                : `已选择 ${selectedLayers.length} 个图层`}
+          </span>
         </div>
       </div>
 
