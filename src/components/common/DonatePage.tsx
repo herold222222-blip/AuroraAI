@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { apiDonate } from '../../api/authApi';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 
 const PRESETS = [9.9, 28, 66, 128, 520] as const;
 
@@ -21,6 +23,9 @@ function buildPayPayload(amount: number, message: string) {
 
 export function DonatePage({ onClose }: { onClose: () => void }) {
   const pushToast = useAppStore((s) => s.pushToast);
+  const token = useAuthStore((s) => s.token);
+  const requireAuth = useAuthStore((s) => s.requireAuth);
+  const setUser = useAuthStore((s) => s.setUser);
   const [amountText, setAmountText] = useState('28');
   const [message, setMessage] = useState('');
   const [paying, setPaying] = useState(false);
@@ -47,15 +52,26 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
       pushToast('请输入有效金额（最少 ¥0.01）', 'info');
       return;
     }
+    if (!requireAuth() || !token) {
+      pushToast('请先登录后再赞赏，以便记录到您的账户', 'info');
+      return;
+    }
     setPaying(true);
-    window.setTimeout(() => {
-      setPaying(false);
-      pushToast(
-        `感谢赞赏 ¥${formatAmount(amount)}${message.trim() ? '，留言已收到' : ''}`,
-        'success',
-      );
-      onClose();
-    }, 900);
+    void (async () => {
+      try {
+        const { user } = await apiDonate(token, amount, message);
+        setUser(user);
+        pushToast(
+          `感谢赞赏 ¥${formatAmount(amount)}${message.trim() ? '，留言已收到' : ''}`,
+          'success',
+        );
+        onClose();
+      } catch (err) {
+        pushToast(err instanceof Error ? err.message : String(err), 'error');
+      } finally {
+        setPaying(false);
+      }
+    })();
   };
 
   return createPortal(
@@ -151,7 +167,7 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
             {paying ? '正在确认支付…' : `确认支付 ¥${valid ? formatAmount(amount) : '0'}`}
           </button>
           <p className="donate-foot-note">
-            演示环境：扫码内容为订单摘要二维码；点击确认后记录本次赞赏。
+            扫码完成支付后点击确认，赞赏金额与留言将记录到您的账户。
           </p>
         </section>
       </main>

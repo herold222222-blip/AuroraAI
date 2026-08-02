@@ -38,11 +38,22 @@ export async function requestImageEdit(payload: ImageEditPayload): Promise<{
     );
   }
 
+  let authToken: string | null = null;
+  try {
+    const { useAuthStore } = await import('../store/useAuthStore');
+    authToken = useAuthStore.getState().token;
+  } catch {
+    /* ignore */
+  }
+
   let res: Response;
   try {
     res = await fetch(editEndpoint(), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
       body: JSON.stringify(payload),
     });
   } catch {
@@ -58,7 +69,15 @@ export async function requestImageEdit(payload: ImageEditPayload): Promise<{
   }
 
   if (!res.ok) {
-    if (data.error) throw new Error(data.error);
+    if (data.error) {
+      try {
+        const { useAuthStore } = await import('../store/useAuthStore');
+        useAuthStore.getState().notifyQuotaError(data.error);
+      } catch {
+        /* ignore */
+      }
+      throw new Error(data.error);
+    }
     if (res.status === 404) {
       throw new Error(
         '图像编辑接口未部署。请确认 Netlify 已包含 Functions，并重新部署。',

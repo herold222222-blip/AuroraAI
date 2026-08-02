@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { convertToPixelCrop, cropToImg } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
+import { apiPublicApis } from '../../api/authApi';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import {
@@ -19,7 +20,10 @@ import {
   PromptRefZone,
   RefImageLightbox,
 } from './PromptRefAttach';
-import { IMAGE_EDIT_MODELS } from '../../image/editModels';
+import {
+  IMAGE_EDIT_MODELS,
+  type ImageEditModelId,
+} from '../../image/editModels';
 
 const MAX_STYLE_REFS = 50;
 const STYLE_REF_API_BUDGET = 4.2 * 1024 * 1024;
@@ -84,6 +88,30 @@ export function ImageBottomControls() {
   const pushToast = useAppStore((s) => s.pushToast);
   const editModel = useImageStore((s) => s.editModel);
   const setEditModel = useImageStore((s) => s.setEditModel);
+  const [enabledKinds, setEnabledKinds] = useState<Set<string> | null>(null);
+
+  useEffect(() => {
+    void apiPublicApis()
+      .then((r) => {
+        const kinds = new Set(
+          r.apis.filter((a) => a.enabled).map((a) => a.kind),
+        );
+        setEnabledKinds(kinds);
+      })
+      .catch(() => setEnabledKinds(null));
+  }, []);
+
+  const editModels = useMemo(() => {
+    if (!enabledKinds) return IMAGE_EDIT_MODELS;
+    const list = IMAGE_EDIT_MODELS.filter((m) => enabledKinds.has(m.kind));
+    return list.length ? list : IMAGE_EDIT_MODELS;
+  }, [enabledKinds]);
+
+  useEffect(() => {
+    if (!editModels.some((m) => m.id === editModel)) {
+      setEditModel(editModels[0]?.id as ImageEditModelId);
+    }
+  }, [editModels, editModel, setEditModel]);
 
   const placeholder = useMemo(() => {
     if (brushRegions.length || hasMask) return '描述要在涂抹区域内修改的内容…';
@@ -185,7 +213,7 @@ export function ImageBottomControls() {
             <div className="img-model-row">
               <span className="img-model-label">选择模型</span>
               <div className="img-model-list" role="radiogroup" aria-label="选择模型">
-                {IMAGE_EDIT_MODELS.map((m) => {
+                {editModels.map((m) => {
                   const active = editModel === m.id;
                   return (
                     <button

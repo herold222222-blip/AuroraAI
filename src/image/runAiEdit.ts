@@ -13,6 +13,7 @@ import {
   padMaskToCanvas,
 } from './localComposite';
 import { bakeSketchMarksOntoImage } from './bakeSketchMarks';
+import { applyAuroraWatermark } from './auroraWatermark';
 
 const LOCAL_SYSTEM = `CRITICAL LOCAL EDIT CONSTRAINTS (must obey strictly):
 1. You may change ONLY the region indicated by the mask and/or hotspot.
@@ -54,6 +55,8 @@ export async function runAiEdit(opts: {
   materialRefs?: string[];
   /** Skip reading brush mask / store hotspots; use only overrides. */
   isolated?: boolean;
+  /** Skip Aurora watermark (for intermediate multi-step AI edits). */
+  skipWatermark?: boolean;
 }): Promise<string> {
   const state = useImageStore.getState();
   const editModel = state.editModel ?? 'banana-gemini';
@@ -63,6 +66,9 @@ export async function runAiEdit(opts: {
     state.currentUrl;
   const current = working;
   if (!current) throw new Error('没有可编辑的图片');
+
+  const finish = async (url: string) =>
+    opts.skipWatermark ? url : applyAuroraWatermark(url);
 
   const refs =
     opts.materialRefs !== undefined
@@ -88,7 +94,15 @@ export async function runAiEdit(opts: {
       strokeMaskDataUrl: activeHotspot.strokeMaskDataUrl,
     };
     if (!mark.prompt) throw new Error('请填写素描标记的修改要求');
-    return runSketchMarkupEdit(current, [mark], refs, opts.systemHint);
+    return finish(
+      await runSketchMarkupEdit(
+        current,
+        [mark],
+        refs,
+        opts.systemHint,
+        true,
+      ),
+    );
   }
 
   const pad = await padToSupportedRatio(current);
@@ -167,9 +181,11 @@ export async function runAiEdit(opts: {
   );
 
   if (local && naturalMaskUrl) {
-    return compositeLocalStrict(current, cropped, naturalMaskUrl);
+    return finish(
+      await compositeLocalStrict(current, cropped, naturalMaskUrl),
+    );
   }
-  return cropped;
+  return finish(cropped);
 }
 
 /**
@@ -181,6 +197,7 @@ export async function runSketchMarkupEdit(
   marks: HotspotPoint[],
   materialRefs?: string[],
   systemHint?: string,
+  skipWatermark?: boolean,
 ): Promise<string> {
   const points = marks.filter((p) => p.prompt.trim());
   if (!points.length) {
@@ -231,7 +248,7 @@ export async function runSketchMarkupEdit(
     model: useImageStore.getState().editModel ?? 'banana-gemini',
   });
 
-  return cropFromPadSized(
+  const cropped = await cropFromPadSized(
     result.imageDataUrl,
     pad.originalCrop,
     pad.canvasW,
@@ -239,6 +256,7 @@ export async function runSketchMarkupEdit(
     size.w,
     size.h,
   );
+  return skipWatermark ? cropped : applyAuroraWatermark(cropped);
 }
 
 /** Apply all numbered sketch marks in one Gemini markup pass. */
@@ -267,9 +285,10 @@ export async function runMultiBrushEdits(): Promise<string> {
       imageUrl: current,
       naturalMaskUrl: r.maskDataUrl,
       isolated: true,
+      skipWatermark: true,
     });
   }
-  return current;
+  return applyAuroraWatermark(current);
 }
 
 async function loadSize(url: string) {

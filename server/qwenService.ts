@@ -7,28 +7,34 @@ const DEFAULT_ENDPOINT =
 /** Prefer edit-oriented model; override with QWEN_IMAGE_MODEL. */
 const DEFAULT_MODEL = 'qwen-image-edit-plus';
 
-function getApiKey(): string {
+function getApiKey(override?: string): string {
   const key =
+    override?.trim() ||
     process.env.DASHSCOPE_API_KEY?.trim() ||
     process.env.QWEN_API_KEY?.trim() ||
     process.env.QWEN_IMAGE_API_KEY?.trim();
   if (!key) {
     throw new Error(
-      '缺少 DASHSCOPE_API_KEY（千问）。请在项目根目录 .env 或 Netlify 环境变量中配置后重试。',
+      '缺少 DASHSCOPE_API_KEY（千问）。请在项目根目录 .env 或 Netlify 环境变量中配置后重试，或在管理员后台 API 管理中配置密钥。',
     );
   }
   return key;
 }
 
-function endpoint(): string {
-  const base = process.env.DASHSCOPE_BASE_URL?.trim();
+function endpoint(baseOverride?: string): string {
+  const base =
+    baseOverride?.trim() || process.env.DASHSCOPE_BASE_URL?.trim();
   if (!base) return DEFAULT_ENDPOINT;
   if (base.includes('/services/')) return base;
   return `${base.replace(/\/$/, '')}/services/aigc/multimodal-generation/generation`;
 }
 
-function modelName(): string {
-  return process.env.QWEN_IMAGE_MODEL?.trim() || DEFAULT_MODEL;
+function modelName(override?: string): string {
+  return (
+    override?.trim() ||
+    process.env.QWEN_IMAGE_MODEL?.trim() ||
+    DEFAULT_MODEL
+  );
 }
 
 async function imageRefToDataUrl(image: string): Promise<string> {
@@ -52,7 +58,9 @@ export async function editImageWithQwen(req: EditRequest): Promise<{
   imageDataUrl: string;
   text?: string;
 }> {
-  const apiKey = getApiKey();
+  const { assertApiEnabled } = await import('./apiStore');
+  const runtime = await assertApiEnabled('qwen');
+  const apiKey = getApiKey(runtime.apiKey);
   const prompt = buildEditPrompt(req);
 
   const content: ContentPart[] = [{ image: req.imageDataUrl }];
@@ -74,7 +82,7 @@ export async function editImageWithQwen(req: EditRequest): Promise<{
   content.push({ text: prompt });
 
   const body = {
-    model: modelName(),
+    model: modelName(runtime.model),
     input: {
       messages: [
         {
@@ -92,7 +100,7 @@ export async function editImageWithQwen(req: EditRequest): Promise<{
 
   let res: Response;
   try {
-    res = await fetch(endpoint(), {
+    res = await fetch(endpoint(runtime.baseUrl), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

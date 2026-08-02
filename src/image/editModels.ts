@@ -2,18 +2,21 @@ export type ImageEditModelId = 'banana-gemini' | 'qwen-image';
 
 export const IMAGE_EDIT_MODELS: {
   id: ImageEditModelId;
+  kind: 'gemini' | 'qwen';
   label: string;
   hint: string;
   ready: boolean;
 }[] = [
   {
     id: 'banana-gemini',
+    kind: 'gemini',
     label: 'Banana-gemini',
     hint: '当前默认改图模型',
     ready: true,
   },
   {
     id: 'qwen-image',
+    kind: 'qwen',
     label: 'Qwen-Image',
     hint: '阿里云千问图像编辑模型',
     ready: true,

@@ -4,7 +4,8 @@ export type ViewId =
   | 'workbench2d'
   | 'build'
   | 'workbench3d'
-  | 'image';
+  | 'image'
+  | 'admin';
 
 export type Dimension = '2D' | '3D';
 

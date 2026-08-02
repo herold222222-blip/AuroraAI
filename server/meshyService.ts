@@ -1,11 +1,16 @@
 const MESHY_BASE = 'https://api.meshy.ai/openapi/v1';
 
-function apiKey() {
-  const key = process.env.MESHY_API_KEY?.trim();
+async function meshyRuntime() {
+  const { assertApiEnabled } = await import('./apiStore');
+  const runtime = await assertApiEnabled('meshy');
+  const key = runtime.apiKey || process.env.MESHY_API_KEY?.trim();
   if (!key) {
-    throw new Error('未配置 MESHY_API_KEY，请在 .env 中设置');
+    throw new Error(
+      '未配置 MESHY_API_KEY，请在 .env 中设置，或在管理员后台 API 管理中配置密钥',
+    );
   }
-  return key;
+  const base = (runtime.baseUrl || MESHY_BASE).replace(/\/$/, '');
+  return { key, base, model: runtime.model };
 }
 
 export interface MeshyCreateBody {
@@ -26,9 +31,11 @@ export async function createImageTo3dTask(body: MeshyCreateBody) {
     throw new Error('Meshy 需要 data:image 格式的图片');
   }
 
+  const { key, base, model } = await meshyRuntime();
   const model_type = body.modelType ?? 'smart-topology';
   const ai_model =
     body.aiModel ??
+    model ??
     (model_type === 'smart-topology' ? 'meshy-t2' : 'latest');
 
   const payload: Record<string, unknown> = {
@@ -49,10 +56,10 @@ export async function createImageTo3dTask(body: MeshyCreateBody) {
     payload.target_polycount = body.targetPolycount;
   }
 
-  const res = await fetch(`${MESHY_BASE}/image-to-3d`, {
+  const res = await fetch(`${base}/image-to-3d`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${apiKey()}`,
+      Authorization: `Bearer ${key}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
@@ -74,8 +81,9 @@ export async function createImageTo3dTask(body: MeshyCreateBody) {
 }
 
 export async function getImageTo3dTask(taskId: string) {
-  const res = await fetch(`${MESHY_BASE}/image-to-3d/${encodeURIComponent(taskId)}`, {
-    headers: { Authorization: `Bearer ${apiKey()}` },
+  const { key, base } = await meshyRuntime();
+  const res = await fetch(`${base}/image-to-3d/${encodeURIComponent(taskId)}`, {
+    headers: { Authorization: `Bearer ${key}` },
   });
   const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {

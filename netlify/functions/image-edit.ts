@@ -2,7 +2,7 @@ import { editImage, type EditRequest } from '../../server/geminiService';
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Content-Type': 'application/json',
 };
@@ -90,12 +90,31 @@ export async function handler(event: {
       });
     }
 
+    const {
+      assertUsageFromAuthHeader,
+      bumpUsageFromAuthHeader,
+    } = await import('../../server/authHandlers');
+    const { QuotaExceededError } = await import('../../server/userStore');
+    try {
+      await assertUsageFromAuthHeader(event.headers || {}, 'imageEdit');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = err instanceof QuotaExceededError ? 403 : 400;
+      return json(status, { error: message });
+    }
+
     const result = await editImage(body);
+    try {
+      await bumpUsageFromAuthHeader(event.headers || {}, 'imageEdit');
+    } catch (err) {
+      if (err instanceof QuotaExceededError) {
+        return json(403, { error: err.message });
+      }
+    }
     return json(200, result);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[image-edit]', message);
-    // Surface Google/Gemini client 400s clearly
     return json(500, { error: message });
   }
 }

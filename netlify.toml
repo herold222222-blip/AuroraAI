@@ -10,7 +10,7 @@
   node_bundler = "esbuild"
   directory = "netlify/functions"
   # Keep Gemini SDK as external package so Netlify installs it from node_modules
-  external_node_modules = ["@google/genai"]
+  external_node_modules = ["@google/genai", "@netlify/blobs", "bcryptjs"]
 
 # Gemini image edits can take a while (paid plans allow up to 26s; free ~10s)
 [functions."image-edit"]
@@ -28,6 +28,21 @@
   to = "/.netlify/functions/health"
   status = 200
   force = true
+
+[[redirects]]
+  from = "/api/auth/*"
+  to = "/.netlify/functions/auth/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/auth"
+  to = "/.netlify/functions/auth"
+  status = 200
+  force = true
+
+[functions."auth"]
+  timeout = 26
 
 # SPA fallback
 [[redirects]]

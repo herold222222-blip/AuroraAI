@@ -42,11 +42,14 @@ function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
   return { mimeType: m[1], base64: m[2] };
 }
 
-function getClient() {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+function getClient(apiKeyOverride?: string) {
+  const apiKey =
+    apiKeyOverride?.trim() ||
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY;
   if (!apiKey) {
     throw new Error(
-      '缺少 GEMINI_API_KEY。请在 Netlify → Site configuration → Environment variables 中添加该变量并重新部署（本地开发则写入项目根目录 .env）。',
+      '缺少 GEMINI_API_KEY。请在 Netlify → Site configuration → Environment variables 中添加该变量并重新部署（本地开发则写入项目根目录 .env），或在管理员后台 API 管理中配置密钥。',
     );
   }
   return new GoogleGenAI({
@@ -164,7 +167,10 @@ export async function editImage(req: EditRequest): Promise<{
     return editImageWithQwen(req);
   }
 
-  const ai = getClient();
+  const { assertApiEnabled } = await import('./apiStore');
+  const runtime = await assertApiEnabled('gemini');
+  const ai = getClient(runtime.apiKey);
+  const modelId = runtime.model || MODEL;
   const { mimeType, base64 } = parseDataUrl(req.imageDataUrl);
 
   const contents: Array<{
@@ -192,7 +198,7 @@ export async function editImage(req: EditRequest): Promise<{
 
   const response = await withRetry(() =>
     ai.models.generateContent({
-      model: MODEL,
+      model: modelId,
       contents: [{ role: 'user', parts: contents }],
       config: {
         responseModalities: [Modality.TEXT, Modality.IMAGE],

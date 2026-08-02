@@ -22,6 +22,7 @@ import { runSceneAI } from '../ai/pipeline';
 import { generateFallbackScene } from '../ai/fallback';
 import { buildScene } from '../ai/scene';
 import { useImageStore } from '../image/useImageStore';
+import { useAuthStore } from './useAuthStore';
 import { createMeshyImageTo3d, pollMeshyImageTo3d } from '../ai/meshyApi';
 import { viewportController } from '../components/workbench/viewportController';
 import {
@@ -228,6 +229,7 @@ interface AppState {
   }) => Promise<void>;
   enterImageModule: () => void;
   enterModelModule: () => void;
+  enterAdminModule: () => void;
   /** Send selected model snapshots into the image editor (single or multi). */
   sendSnapshotsToImage: (ids: string[]) => void;
   /** Hand off image-editor `currentUrl` into 图生模型 (analyze → 2D → 3D). */
@@ -483,9 +485,16 @@ export const useAppStore = create<AppState>((set, get) => {
     enterModelModule: () => {
       const target = get().lastModelView || 'upload';
       set({
-        view: target === 'image' ? 'upload' : target,
+        view: target === 'image' || target === 'admin' ? 'upload' : target,
         transitionTo: null,
       });
+    },
+    enterAdminModule: () => {
+      const cur = get().view;
+      if (cur !== 'admin' && cur !== 'image') {
+        set({ lastModelView: cur });
+      }
+      set({ view: 'admin', transitionTo: null });
     },
 
     sendSnapshotsToImage: (ids) => {
@@ -783,6 +792,13 @@ export const useAppStore = create<AppState>((set, get) => {
           viewingSnapshotId: null,
           previewingSnapshotId: null,
         });
+        const usage = await useAuthStore.getState().trackUsage('modelGen');
+        if (!usage.ok) {
+          if (!useAuthStore.getState().quotaOpen) {
+            get().pushToast(usage.error, 'error');
+          }
+          return;
+        }
         get().startTransition('build', 'workbench3d');
       })();
     },
@@ -793,6 +809,13 @@ export const useAppStore = create<AppState>((set, get) => {
       const image = get().image;
       if (!image?.url) {
         get().pushToast('请先上传图片', 'info');
+        return;
+      }
+      const usage = await useAuthStore.getState().trackUsage('modelGen');
+      if (!usage.ok) {
+        if (!useAuthStore.getState().quotaOpen) {
+          get().pushToast(usage.error, 'error');
+        }
         return;
       }
       await get().ensureSourceImageSnapshot({
@@ -1775,6 +1798,14 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ exportSettings: { ...get().exportSettings, ...patch } }),
 
     pushToast: (text, tone = 'info') => {
+      // Quota exhausted uses a dedicated modal; skip duplicate toasts.
+      if (
+        typeof text === 'string' &&
+        (text.includes('限额已经使用完') || text.includes('次数已用完'))
+      ) {
+        useAuthStore.getState().notifyQuotaError(text);
+        return;
+      }
       const id = uid('toast');
       set({ toasts: [...get().toasts, { id, text, tone }] });
       setTimeout(() => get().dismissToast(id), 3000);

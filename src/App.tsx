@@ -6,11 +6,13 @@ import { Workbench2D } from './components/pages/Workbench2D';
 import { BuildTransition } from './components/pages/BuildTransition';
 import { Workbench3D } from './components/pages/Workbench3D';
 import { ImageWorkbench } from './components/pages/ImageWorkbench';
+import { AdminPanel } from './components/pages/AdminPanel';
 import { Toasts } from './components/common/Toasts';
 import { AppSidebar } from './components/common/AppSidebar';
 import { TopBar } from './components/common/TopBar';
 import { AuthGuard } from './components/common/AuthGuard';
 import { LoginModal } from './components/common/LoginModal';
+import { QuotaExhaustedModal } from './components/common/AccountModals';
 import { ProjectPromoteModal } from './components/common/ProjectPromoteModal';
 import { ImageDownloadProvider } from './components/common/ImageDownloadContext';
 import { useAuthStore } from './store/useAuthStore';
@@ -48,6 +50,11 @@ export default function App() {
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const requireAuth = useAuthStore((s) => s.requireAuth);
+  const refreshMe = useAuthStore((s) => s.refreshMe);
+
+  useEffect(() => {
+    void refreshMe();
+  }, [refreshMe]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -83,6 +90,8 @@ export default function App() {
       <TopBar variant="workbench" workbenchSuffix="场景分析" />
     ) : view === 'build' ? (
       <TopBar variant="workbench" workbenchSuffix="三维构建" />
+    ) : view === 'admin' ? (
+      <TopBar variant="workbench" workbenchSuffix="管理后台" />
     ) : (
       <TopBar variant="workbench" workbenchSuffix="图生模型" />
     );
@@ -92,6 +101,7 @@ export default function App() {
       <div className="app-shell">
         <AuthGuard />
         <LoginModal />
+        <QuotaExhaustedModal />
         <ProjectPromoteModal />
         {topBar}
         <div className="app-body">
@@ -104,6 +114,7 @@ export default function App() {
             {view === 'build' && <BuildTransition />}
             {view === 'workbench3d' && <Workbench3D />}
             {view === 'image' && <ImageWorkbench />}
+            {view === 'admin' && <AdminPanel />}
             <Toasts />
           </div>
         </div>
