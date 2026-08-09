@@ -5,10 +5,13 @@ import bcrypt from 'bcryptjs';
 import {
   DEFAULT_AVATARS,
   DEFAULT_DAILY_LIMIT,
+  DEFAULT_GEMINI_DAILY_LIMIT,
+  DEFAULT_QWEN_DAILY_LIMIT,
   SUPER_ADMIN_PASSWORD,
   SUPER_ADMIN_USERNAME,
   type SponsorshipRecord,
   type StoredUser,
+  type UsageKind,
   type UserLevel,
   type UserRole,
   isUnlimited,
@@ -41,23 +44,34 @@ function normalizeUserInner(raw: Partial<StoredUser> & Record<string, unknown>):
   const usageDayKey =
     typeof raw.usageDayKey === 'string' && raw.usageDayKey ? raw.usageDayKey : day;
 
-  let imageEditUsedToday = Number(raw.imageEditUsedToday) || 0;
+  let geminiEditUsedToday =
+    raw.geminiEditUsedToday != null
+      ? Number(raw.geminiEditUsedToday) || 0
+      : Number(raw.imageEditUsedToday) || 0;
+  let qwenEditUsedToday =
+    raw.qwenEditUsedToday != null ? Number(raw.qwenEditUsedToday) || 0 : 0;
   let modelGenUsedToday = Number(raw.modelGenUsedToday) || 0;
   if (usageDayKey !== day) {
-    imageEditUsedToday = 0;
+    geminiEditUsedToday = 0;
+    qwenEditUsedToday = 0;
     modelGenUsedToday = 0;
   }
 
-  const parseLimit = (v: unknown, adminDefaultNull: boolean): number | null => {
+  const parseLimit = (
+    v: unknown,
+    userDefault: number,
+    adminDefaultNull = true,
+  ): number | null => {
     if (adminDefaultNull && role === 'admin') return null;
-    if (v === null || v === undefined) {
-      return role === 'admin' ? null : DEFAULT_DAILY_LIMIT;
+    if (v === null) return role === 'admin' ? null : null;
+    if (v === undefined) {
+      return role === 'admin' ? null : userDefault;
     }
     if (typeof v === 'number') {
       if (v < 0) return null;
       return Math.floor(v);
     }
-    return role === 'admin' ? null : DEFAULT_DAILY_LIMIT;
+    return role === 'admin' ? null : userDefault;
   };
 
   const sponsorships = Array.isArray(raw.sponsorships)
@@ -68,6 +82,15 @@ function normalizeUserInner(raw: Partial<StoredUser> & Record<string, unknown>):
 
   const username = String(raw.username || '');
   const nicknameRaw = String(raw.nickname || '').trim();
+  const geminiLimitRaw =
+    raw.geminiEditDailyLimit !== undefined
+      ? raw.geminiEditDailyLimit
+      : undefined;
+  const qwenLimitRaw =
+    raw.qwenEditDailyLimit !== undefined
+      ? raw.qwenEditDailyLimit
+      : undefined;
+
   return {
     id: String(raw.id || uid()),
     username,
@@ -80,10 +103,17 @@ function normalizeUserInner(raw: Partial<StoredUser> & Record<string, unknown>):
     note: String(raw.note || ''),
     lastIp: String(raw.lastIp || ''),
     lastRegion: String(raw.lastRegion || ''),
-    imageEditDailyLimit: parseLimit(raw.imageEditDailyLimit, true),
-    modelGenDailyLimit: parseLimit(raw.modelGenDailyLimit, true),
-    imageEditUsedToday,
+    geminiEditDailyLimit: parseLimit(
+      geminiLimitRaw,
+      DEFAULT_GEMINI_DAILY_LIMIT,
+    ),
+    qwenEditDailyLimit: parseLimit(qwenLimitRaw, DEFAULT_QWEN_DAILY_LIMIT),
+    modelGenDailyLimit: parseLimit(raw.modelGenDailyLimit, DEFAULT_DAILY_LIMIT),
+    geminiEditUsedToday,
+    qwenEditUsedToday,
     modelGenUsedToday,
+    watermarkEnabled:
+      role === 'admin' ? false : raw.watermarkEnabled !== false,
     usageDayKey: usageDayKey !== day ? day : usageDayKey,
     sponsorships,
     createdAt: Number(raw.createdAt) || Date.now(),
@@ -152,7 +182,8 @@ function rollUsageDay(user: StoredUser): StoredUser {
   return {
     ...user,
     usageDayKey: day,
-    imageEditUsedToday: 0,
+    geminiEditUsedToday: 0,
+    qwenEditUsedToday: 0,
     modelGenUsedToday: 0,
   };
 }
@@ -168,8 +199,13 @@ export async function ensureSeedAdmin(): Promise<void> {
       existing.role = 'admin';
       dirty = true;
     }
-    if (existing.imageEditDailyLimit != null || existing.modelGenDailyLimit != null) {
-      existing.imageEditDailyLimit = null;
+    if (
+      existing.geminiEditDailyLimit != null ||
+      existing.qwenEditDailyLimit != null ||
+      existing.modelGenDailyLimit != null
+    ) {
+      existing.geminiEditDailyLimit = null;
+      existing.qwenEditDailyLimit = null;
       existing.modelGenDailyLimit = null;
       dirty = true;
     }
@@ -197,9 +233,11 @@ export async function ensureSeedAdmin(): Promise<void> {
       note: '超级管理员',
       lastIp: '',
       lastRegion: '',
-      imageEditDailyLimit: null,
+      geminiEditDailyLimit: null,
+      qwenEditDailyLimit: null,
       modelGenDailyLimit: null,
-      imageEditUsedToday: 0,
+      geminiEditUsedToday: 0,
+      qwenEditUsedToday: 0,
       modelGenUsedToday: 0,
       usageDayKey: todayKey(),
       sponsorships: [],
@@ -317,10 +355,13 @@ export async function createUser(input: {
     note: '',
     lastIp: input.ip || '',
     lastRegion: input.region || '',
-    imageEditDailyLimit: DEFAULT_DAILY_LIMIT,
+    geminiEditDailyLimit: DEFAULT_GEMINI_DAILY_LIMIT,
+    qwenEditDailyLimit: DEFAULT_QWEN_DAILY_LIMIT,
     modelGenDailyLimit: DEFAULT_DAILY_LIMIT,
-    imageEditUsedToday: 0,
+    geminiEditUsedToday: 0,
+    qwenEditUsedToday: 0,
     modelGenUsedToday: 0,
+    watermarkEnabled: true,
     usageDayKey: todayKey(),
     sponsorships: [],
     createdAt: now,
@@ -342,8 +383,10 @@ export type UserPatch = Partial<
     | 'phone'
     | 'lastIp'
     | 'lastRegion'
-    | 'imageEditDailyLimit'
+    | 'geminiEditDailyLimit'
+    | 'qwenEditDailyLimit'
     | 'modelGenDailyLimit'
+    | 'watermarkEnabled'
     | 'passwordHash'
     | 'role'
     | 'level'
@@ -366,8 +409,10 @@ export async function updateUser(
     updatedAt: Date.now(),
   });
   if (next.role === 'admin') {
-    next.imageEditDailyLimit = null;
+    next.geminiEditDailyLimit = null;
+    next.qwenEditDailyLimit = null;
     next.modelGenDailyLimit = null;
+    next.watermarkEnabled = false;
   }
   db.users[idx] = normalizeUser(next);
   await saveDb(db);
@@ -388,21 +433,37 @@ export class QuotaExceededError extends Error {
   }
 }
 
-function quotaError(_kind: 'imageEdit' | 'modelGen', _limit: number) {
+function quotaError(_kind: UsageKind, _limit: number) {
   return new QuotaExceededError(QUOTA_EXCEEDED_MESSAGE);
+}
+
+function limitOf(user: StoredUser, kind: UsageKind): number | null {
+  if (kind === 'geminiEdit') return user.geminiEditDailyLimit;
+  if (kind === 'qwenEdit') return user.qwenEditDailyLimit;
+  return user.modelGenDailyLimit;
+}
+
+function usedOf(user: StoredUser, kind: UsageKind): number {
+  if (kind === 'geminiEdit') return user.geminiEditUsedToday;
+  if (kind === 'qwenEdit') return user.qwenEditUsedToday;
+  return user.modelGenUsedToday;
+}
+
+function bumpUsed(user: StoredUser, kind: UsageKind): void {
+  if (kind === 'geminiEdit') user.geminiEditUsedToday += 1;
+  else if (kind === 'qwenEdit') user.qwenEditUsedToday += 1;
+  else user.modelGenUsedToday += 1;
 }
 
 export async function assertUsageAvailable(
   userId: string,
-  kind: 'imageEdit' | 'modelGen',
+  kind: UsageKind,
 ): Promise<StoredUser> {
   const user = await findById(userId);
   if (!user) throw new Error('用户不存在');
   if (!isUnlimited(user, kind)) {
-    const limit =
-      kind === 'imageEdit' ? user.imageEditDailyLimit! : user.modelGenDailyLimit!;
-    const used =
-      kind === 'imageEdit' ? user.imageEditUsedToday : user.modelGenUsedToday;
+    const limit = limitOf(user, kind)!;
+    const used = usedOf(user, kind);
     if (used >= limit) throw quotaError(kind, limit);
   }
   return user;
@@ -410,7 +471,7 @@ export async function assertUsageAvailable(
 
 export async function consumeUsage(
   userId: string,
-  kind: 'imageEdit' | 'modelGen',
+  kind: UsageKind,
   ip?: string,
   region?: string,
 ): Promise<StoredUser> {
@@ -420,15 +481,12 @@ export async function consumeUsage(
 
   let user = rollUsageDay(db.users[idx]);
   if (!isUnlimited(user, kind)) {
-    const limit =
-      kind === 'imageEdit' ? user.imageEditDailyLimit! : user.modelGenDailyLimit!;
-    const used =
-      kind === 'imageEdit' ? user.imageEditUsedToday : user.modelGenUsedToday;
+    const limit = limitOf(user, kind)!;
+    const used = usedOf(user, kind);
     if (used >= limit) throw quotaError(kind, limit);
   }
 
-  if (kind === 'imageEdit') user.imageEditUsedToday += 1;
-  else user.modelGenUsedToday += 1;
+  bumpUsed(user, kind);
   if (ip) user.lastIp = ip;
   if (region) user.lastRegion = region;
   user.updatedAt = Date.now();
@@ -440,7 +498,7 @@ export async function consumeUsage(
 /** @deprecated alias — prefer consumeUsage */
 export async function incrementUsage(
   userId: string,
-  kind: 'imageEdit' | 'modelGen',
+  kind: UsageKind,
   ip?: string,
 ): Promise<StoredUser | null> {
   try {

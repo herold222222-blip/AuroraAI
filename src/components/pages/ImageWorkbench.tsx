@@ -10,6 +10,8 @@ import { useImageStore } from '../../image/useImageStore';
 export function ImageWorkbench() {
   const currentUrl = useImageStore((s) => s.currentUrl);
   const busy = useImageStore((s) => s.busy);
+  const mobileAlbumOpen = useImageStore((s) => s.mobileAlbumOpen);
+  const setMobileAlbumOpen = useImageStore((s) => s.setMobileAlbumOpen);
 
   return (
     <div className={`app img-workbench${!currentUrl ? ' is-start' : ''}`}>
@@ -23,16 +25,30 @@ export function ImageWorkbench() {
               {busy && <span className="img-busy-pill">AI 处理中…</span>}
             </div>
             <div className="img-editor-body">
-              <RetouchToolbar />
+              <div className="img-editor-tools">
+                <RetouchToolbar />
+                <MaterialDrawer />
+              </div>
               <ImageCanvasStage />
-              <MaterialDrawer />
             </div>
             <ImageBottomControls />
             <ImageFooterBar />
           </>
         )}
       </div>
-      {currentUrl ? <ImageRightSidebar /> : null}
+      {currentUrl ? (
+        <>
+          {mobileAlbumOpen && (
+            <button
+              type="button"
+              className="img-album-backdrop"
+              aria-label="关闭原图列表"
+              onClick={() => setMobileAlbumOpen(false)}
+            />
+          )}
+          <ImageRightSidebar />
+        </>
+      ) : null}
     </div>
   );
 }

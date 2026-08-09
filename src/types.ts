@@ -1,11 +1,13 @@
 export type ViewId =
+  | 'home'
   | 'upload'
   | 'analysis'
   | 'workbench2d'
   | 'build'
   | 'workbench3d'
   | 'image'
-  | 'admin';
+  | 'admin'
+  | 'assets';
 
 export type Dimension = '2D' | '3D';
 

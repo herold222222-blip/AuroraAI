@@ -23,6 +23,7 @@ import { generateFallbackScene } from '../ai/fallback';
 import { buildScene } from '../ai/scene';
 import { useImageStore } from '../image/useImageStore';
 import { useAuthStore } from './useAuthStore';
+import { registerGeneratedModel } from './useAssetStore';
 import { createMeshyImageTo3d, pollMeshyImageTo3d } from '../ai/meshyApi';
 import { viewportController } from '../components/workbench/viewportController';
 import {
@@ -138,11 +139,17 @@ interface AppState {
   meshyModelUrl: string | null;
   /** After analysis completes, auto-run build3D (used by「重新分层再构建」). */
   pendingBuildAfterAnalysis: boolean;
+  /** Non-admin tried to enter 图生模型 / 3D — show blocked modal. */
+  modelDevBlockedOpen: boolean;
 
   goto: (view: ViewId) => void;
   startTransition: (progressView: ViewId, target: ViewId) => void;
   logoReset: () => void;
   back: () => void;
+  openModelDevBlocked: () => void;
+  closeModelDevBlocked: () => void;
+  /** Admin-only gate for model / 3D flows. */
+  requireModelAccess: () => boolean;
 
   setImage: (img: UploadedImage) => void;
   clearImage: () => void;
@@ -427,7 +434,7 @@ export const useAppStore = create<AppState>((set, get) => {
   projectBags.set(SCRATCH_PROJECT_ID, emptyBag());
 
   return {
-    view: 'upload',
+    view: 'home',
     transitionTo: null,
     image: null,
     grid: null,
@@ -471,10 +478,19 @@ export const useAppStore = create<AppState>((set, get) => {
     lastModelView: 'upload' as ViewId,
     meshyModelUrl: null,
     pendingBuildAfterAnalysis: false,
+    modelDevBlockedOpen: false,
 
     goto: (view) => set({ view, transitionTo: null }),
     startTransition: (progressView, target) =>
       set({ view: progressView, transitionTo: target }),
+
+    openModelDevBlocked: () => set({ modelDevBlockedOpen: true }),
+    closeModelDevBlocked: () => set({ modelDevBlockedOpen: false }),
+    requireModelAccess: () => {
+      if (useAuthStore.getState().isAdmin()) return true;
+      set({ modelDevBlockedOpen: true });
+      return false;
+    },
 
     enterImageModule: () => {
       const cur = get().view;
@@ -483,9 +499,16 @@ export const useAppStore = create<AppState>((set, get) => {
       }
     },
     enterModelModule: () => {
+      if (!get().requireModelAccess()) return;
       const target = get().lastModelView || 'upload';
       set({
-        view: target === 'image' || target === 'admin' ? 'upload' : target,
+        view:
+          target === 'image' ||
+          target === 'admin' ||
+          target === 'home' ||
+          target === 'assets'
+            ? 'upload'
+            : target,
         transitionTo: null,
       });
     },
@@ -511,6 +534,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     start3DFromImageEditor: () => {
+      if (!get().requireModelAccess()) return;
       if (isScratchProjectId(get().activeProjectId)) {
         set({ pendingPromote: { kind: 'to3d' } });
         return;
@@ -550,6 +574,7 @@ export const useAppStore = create<AppState>((set, get) => {
       if (action.kind === 'toImage') {
         get().executeSendSnapshotsToImage(action.snapshotIds);
       } else {
+        if (!get().requireModelAccess()) return;
         get().executeStart3DFromImageEditor();
       }
     },
@@ -590,6 +615,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     executeStart3DFromImageEditor: () => {
+      if (!get().requireModelAccess()) return;
       void (async () => {
         const img = useImageStore.getState();
         let url = await img.getWorkingImageUrl();
@@ -672,6 +698,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     analyze: () => {
+      if (!get().requireModelAccess()) return;
       set({
         view: 'analysis',
         transitionTo: null,
@@ -764,6 +791,7 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     build3D: (opts) => {
+      if (!get().requireModelAccess()) return;
       if (opts?.resegmentFirst) {
         if (!get().image) {
           get().pushToast('请先上传图片', 'info');
@@ -806,6 +834,7 @@ export const useAppStore = create<AppState>((set, get) => {
     setMeshyModelUrl: (url) => set({ meshyModelUrl: url }),
 
     runMeshyBuild: async () => {
+      if (!get().requireModelAccess()) return;
       const image = get().image;
       if (!image?.url) {
         get().pushToast('请先上传图片', 'info');
@@ -854,6 +883,10 @@ export const useAppStore = create<AppState>((set, get) => {
           cameraMode: false,
           viewingSnapshotId: null,
           previewingSnapshotId: null,
+        });
+        registerGeneratedModel({
+          url: glbUrl,
+          label: `${get().projectName || '项目'} · Meshy 模型`,
         });
         get().pushToast('Meshy 三维模型已生成', 'success');
       } catch (err) {

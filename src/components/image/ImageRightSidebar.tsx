@@ -36,6 +36,8 @@ export function ImageRightSidebar() {
   );
   const overwriteSnapshot = useImageStore((s) => s.overwriteSnapshot);
   const openFromUrl = useImageStore((s) => s.openFromUrl);
+  const mobileAlbumOpen = useImageStore((s) => s.mobileAlbumOpen);
+  const setMobileAlbumOpen = useImageStore((s) => s.setMobileAlbumOpen);
 
   // Heal labels corrupted by a past non-UTF8 write (`??? 1` → `结果 1`).
   useEffect(() => {
@@ -247,29 +249,43 @@ export function ImageRightSidebar() {
   };
 
   return (
-    <aside className="panel right img-right-sidebar">
+    <aside
+      className={`panel right img-right-sidebar${
+        mobileAlbumOpen ? ' is-mobile-open' : ''
+      }`}
+    >
       <div className="img-side-head">
         <div className="img-side-head-title">
           <span>{headTitle}</span>
           <span className="img-side-count">{headCount}</span>
         </div>
-        {inAlbumDetail && (
+        <div className="img-side-head-actions">
+          {inAlbumDetail && (
+            <button
+              type="button"
+              className="btn ghost sm img-side-back"
+              onClick={() => {
+                backToSourceList();
+                pushToast(
+                  fromSnapshot || sourceAlbums.some((a) => a.sourceSnapshotId)
+                    ? '已返回快照列表'
+                    : '已返回原图列表',
+                  'info',
+                );
+              }}
+            >
+              {backLabel}
+            </button>
+          )}
           <button
             type="button"
-            className="btn ghost sm img-side-back"
-            onClick={() => {
-              backToSourceList();
-              pushToast(
-                fromSnapshot || sourceAlbums.some((a) => a.sourceSnapshotId)
-                  ? '已返回快照列表'
-                  : '已返回原图列表',
-                'info',
-              );
-            }}
+            className="btn ghost sm img-side-close-mobile"
+            onClick={() => setMobileAlbumOpen(false)}
+            aria-label="关闭"
           >
-            {backLabel}
+            关闭
           </button>
-        )}
+        </div>
       </div>
 
       {inAlbumDetail && originalUrl && (

@@ -66,19 +66,21 @@ interface AuthState {
     password: string,
     phone: string,
     nickname: string,
-    avatar?: string,
+    avatar: string | undefined,
+    smsCode: string,
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
   updateProfile: (patch: {
     nickname?: string;
     avatar?: string;
     phone?: string;
+    smsCode?: string;
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
   logout: () => void;
   requireAuth: () => boolean;
   isAdmin: () => boolean;
   refreshMe: () => Promise<void>;
   trackUsage: (
-    kind: 'imageEdit' | 'modelGen',
+    kind: 'geminiEdit' | 'qwenEdit' | 'modelGen',
   ) => Promise<{ ok: true } | { ok: false; error: string }>;
   setUser: (user: AuthUser) => void;
 }
@@ -123,7 +125,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  register: async (username, password, phone, nickname, avatar) => {
+  register: async (username, password, phone, nickname, avatar, smsCode) => {
     set({ busy: true });
     try {
       const { token, user } = await apiRegister(
@@ -132,6 +134,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         phone,
         nickname,
         avatar,
+        smsCode,
       );
       persist({ token, user });
       set({

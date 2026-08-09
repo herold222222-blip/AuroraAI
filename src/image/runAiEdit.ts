@@ -14,6 +14,20 @@ import {
 } from './localComposite';
 import { bakeSketchMarksOntoImage } from './bakeSketchMarks';
 import { applyAuroraWatermark } from './auroraWatermark';
+import { useAuthStore } from '../store/useAuthStore';
+
+/** Admin never watermarks; regular users follow account setting (default on). */
+function shouldApplyWatermark(): boolean {
+  const user = useAuthStore.getState().user;
+  if (!user) return true;
+  if (user.role === 'admin') return false;
+  return user.watermarkEnabled !== false;
+}
+
+async function maybeWatermark(url: string): Promise<string> {
+  if (!shouldApplyWatermark()) return url;
+  return applyAuroraWatermark(url);
+}
 
 const LOCAL_SYSTEM = `CRITICAL LOCAL EDIT CONSTRAINTS (must obey strictly):
 1. You may change ONLY the region indicated by the mask and/or hotspot.
@@ -68,7 +82,7 @@ export async function runAiEdit(opts: {
   if (!current) throw new Error('没有可编辑的图片');
 
   const finish = async (url: string) =>
-    opts.skipWatermark ? url : applyAuroraWatermark(url);
+    opts.skipWatermark ? url : maybeWatermark(url);
 
   const refs =
     opts.materialRefs !== undefined
@@ -256,7 +270,7 @@ export async function runSketchMarkupEdit(
     size.w,
     size.h,
   );
-  return skipWatermark ? cropped : applyAuroraWatermark(cropped);
+  return skipWatermark ? cropped : maybeWatermark(cropped);
 }
 
 /** Apply all numbered sketch marks in one Gemini markup pass. */
@@ -288,7 +302,7 @@ export async function runMultiBrushEdits(): Promise<string> {
       skipWatermark: true,
     });
   }
-  return applyAuroraWatermark(current);
+  return maybeWatermark(current);
 }
 
 async function loadSize(url: string) {

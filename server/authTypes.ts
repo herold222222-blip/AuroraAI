@@ -1,5 +1,6 @@
 export type UserRole = 'admin' | 'user';
 export type UserLevel = 'normal';
+export type UsageKind = 'geminiEdit' | 'qwenEdit' | 'modelGen';
 
 export interface SponsorshipRecord {
   id: string;
@@ -26,10 +27,17 @@ export interface StoredUser {
    * 每日可用次数；null 表示不限次数。
    * 超级管理员始终按不限处理。
    */
-  imageEditDailyLimit: number | null;
+  geminiEditDailyLimit: number | null;
+  qwenEditDailyLimit: number | null;
   modelGenDailyLimit: number | null;
-  imageEditUsedToday: number;
+  geminiEditUsedToday: number;
+  qwenEditUsedToday: number;
   modelGenUsedToday: number;
+  /**
+   * 普通用户 AI 出图是否带 Aurora 水印；默认 true。
+   * 超级管理员始终不打水印（忽略该字段）。
+   */
+  watermarkEnabled: boolean;
   /** YYYY-MM-DD（东八区） */
   usageDayKey: string;
   sponsorships: SponsorshipRecord[];
@@ -49,19 +57,27 @@ export interface PublicUser {
   note: string;
   lastIp: string;
   lastRegion: string;
-  imageEditDailyLimit: number | null;
+  geminiEditDailyLimit: number | null;
+  qwenEditDailyLimit: number | null;
   modelGenDailyLimit: number | null;
-  imageEditUsedToday: number;
+  geminiEditUsedToday: number;
+  qwenEditUsedToday: number;
   modelGenUsedToday: number;
-  imageEditUnlimited: boolean;
+  geminiEditUnlimited: boolean;
+  qwenEditUnlimited: boolean;
   modelGenUnlimited: boolean;
+  /** 普通用户是否出水印；管理员恒为 false */
+  watermarkEnabled: boolean;
   sponsorshipTotal: number;
   sponsorships: SponsorshipRecord[];
   createdAt: number;
   updatedAt: number;
 }
 
+/** @deprecated model-gen default; prefer DEFAULT_* below */
 export const DEFAULT_DAILY_LIMIT = 20;
+export const DEFAULT_GEMINI_DAILY_LIMIT = 5;
+export const DEFAULT_QWEN_DAILY_LIMIT = 20;
 
 export const DEFAULT_AVATARS = [
   '/avatars/default-1.svg',
@@ -81,13 +97,20 @@ export function levelLabel(level: UserLevel, role: UserRole): string {
   return '普通用户';
 }
 
-export function isUnlimited(
-  user: Pick<StoredUser, 'role' | 'imageEditDailyLimit' | 'modelGenDailyLimit'>,
-  kind: 'imageEdit' | 'modelGen',
-): boolean {
+export function usageKindFromEditModel(
+  model?: string | null,
+): 'geminiEdit' | 'qwenEdit' {
+  return model === 'qwen-image' ? 'qwenEdit' : 'geminiEdit';
+}
+
+export function isUnlimited(user: StoredUser, kind: UsageKind): boolean {
   if (user.role === 'admin') return true;
   const limit =
-    kind === 'imageEdit' ? user.imageEditDailyLimit : user.modelGenDailyLimit;
+    kind === 'geminiEdit'
+      ? user.geminiEditDailyLimit
+      : kind === 'qwenEdit'
+        ? user.qwenEditDailyLimit
+        : user.modelGenDailyLimit;
   return limit == null || limit < 0;
 }
 
@@ -108,12 +131,17 @@ export function toPublicUser(u: StoredUser): PublicUser {
     note: u.note || '',
     lastIp: u.lastIp || '',
     lastRegion: u.lastRegion || '',
-    imageEditDailyLimit: u.imageEditDailyLimit,
+    geminiEditDailyLimit: u.geminiEditDailyLimit,
+    qwenEditDailyLimit: u.qwenEditDailyLimit,
     modelGenDailyLimit: u.modelGenDailyLimit,
-    imageEditUsedToday: u.imageEditUsedToday || 0,
+    geminiEditUsedToday: u.geminiEditUsedToday || 0,
+    qwenEditUsedToday: u.qwenEditUsedToday || 0,
     modelGenUsedToday: u.modelGenUsedToday || 0,
-    imageEditUnlimited: isUnlimited(u, 'imageEdit'),
+    geminiEditUnlimited: isUnlimited(u, 'geminiEdit'),
+    qwenEditUnlimited: isUnlimited(u, 'qwenEdit'),
     modelGenUnlimited: isUnlimited(u, 'modelGen'),
+    watermarkEnabled:
+      u.role === 'admin' ? false : u.watermarkEnabled !== false,
     sponsorshipTotal,
     sponsorships: [...(u.sponsorships || [])].sort(
       (a, b) => b.createdAt - a.createdAt,

@@ -30,6 +30,11 @@ import {
   ensureSeedAdmin,
   type UserPatch,
 } from './userStore';
+import {
+  consumeSmsCode,
+  sendSmsCode,
+  type SmsPurpose,
+} from './smsService';
 
 export type AuthResult = {
   status: number;
@@ -60,6 +65,30 @@ async function resolveIpRegion(
   return { ip, region };
 }
 
+export async function handleSendSms(
+  body: { phone?: string; purpose?: string },
+  headers: Record<string, string | string[] | undefined>,
+): Promise<AuthResult> {
+  const purpose = (body.purpose || '').trim() as SmsPurpose;
+  if (purpose !== 'register' && purpose !== 'change_phone') {
+    return fail('无效的短信用途');
+  }
+  if (purpose === 'change_phone') {
+    const payload = authFromHeader(headers);
+    if (!payload) return fail('未登录或登录已过期', 401);
+  }
+  const result = await sendSmsCode(body.phone || '', purpose);
+  if (!result.ok) {
+    return fail(result.error, result.cooldownSec ? 429 : 400);
+  }
+  return ok({
+    cooldownSec: result.cooldownSec,
+    expiresInSec: result.expiresInSec,
+    provider: result.provider,
+    ...(result.devCode ? { devCode: result.devCode } : {}),
+  });
+}
+
 export async function handleRegister(
   body: {
     username?: string;
@@ -67,16 +96,20 @@ export async function handleRegister(
     phone?: string;
     nickname?: string;
     avatar?: string;
+    smsCode?: string;
   },
   headers: Record<string, string | string[] | undefined>,
 ): Promise<AuthResult> {
   try {
     await ensureSeedAdmin();
+    const phone = (body.phone || '').trim();
+    const verified = consumeSmsCode(phone, 'register', body.smsCode || '');
+    if (!verified.ok) return fail(verified.error);
     const { ip, region } = await resolveIpRegion(headers);
     const user = await createUser({
       username: body.username || '',
       password: body.password || '',
-      phone: body.phone || '',
+      phone,
       nickname: body.nickname || '',
       avatar: body.avatar,
       ip,
@@ -162,12 +195,16 @@ export async function handleUpdateProfile(
     nickname?: string;
     avatar?: string;
     phone?: string;
+    smsCode?: string;
   },
   headers: Record<string, string | string[] | undefined>,
 ): Promise<AuthResult> {
   const payload = authFromHeader(headers);
   if (!payload) return fail('未登录或登录已过期', 401);
   try {
+    const current = await findById(payload.sub);
+    if (!current) return fail('用户不存在', 401);
+
     const patch: UserPatch = {};
     if (typeof body.nickname === 'string') {
       const n = body.nickname.trim();
@@ -181,6 +218,10 @@ export async function handleUpdateProfile(
       const p = body.phone.trim();
       if (!/^1\d{10}$/.test(p)) {
         return fail('手机号需为 11 位有效号码');
+      }
+      if (p !== (current.phone || '').trim()) {
+        const verified = consumeSmsCode(p, 'change_phone', body.smsCode || '');
+        if (!verified.ok) return fail(verified.error);
       }
       patch.phone = p;
     }
@@ -199,8 +240,12 @@ export async function handleUpdateUser(
     nickname?: string;
     avatar?: string;
     phone?: string;
-    imageEditDailyLimit?: number | null;
+    geminiEditDailyLimit?: number | null;
+    qwenEditDailyLimit?: number | null;
     modelGenDailyLimit?: number | null;
+    /** @deprecated — maps to geminiEditDailyLimit */
+    imageEditDailyLimit?: number | null;
+    watermarkEnabled?: boolean;
     /** @deprecated */
     imageEditCount?: number;
     /** @deprecated */
@@ -230,17 +275,23 @@ export async function handleUpdateUser(
       }
       patch.phone = p;
     }
-    const imageLimit =
-      parseLimitField(body.imageEditDailyLimit) !== undefined
-        ? parseLimitField(body.imageEditDailyLimit)
-        : parseLimitField(body.imageEditCount);
+    const geminiLimit =
+      parseLimitField(body.geminiEditDailyLimit) !== undefined
+        ? parseLimitField(body.geminiEditDailyLimit)
+        : parseLimitField(body.imageEditDailyLimit) !== undefined
+          ? parseLimitField(body.imageEditDailyLimit)
+          : parseLimitField(body.imageEditCount);
+    const qwenLimit = parseLimitField(body.qwenEditDailyLimit);
     const modelLimit =
       parseLimitField(body.modelGenDailyLimit) !== undefined
         ? parseLimitField(body.modelGenDailyLimit)
         : parseLimitField(body.modelGenCount);
-    if (imageLimit !== undefined) patch.imageEditDailyLimit = imageLimit;
+    if (geminiLimit !== undefined) patch.geminiEditDailyLimit = geminiLimit;
+    if (qwenLimit !== undefined) patch.qwenEditDailyLimit = qwenLimit;
     if (modelLimit !== undefined) patch.modelGenDailyLimit = modelLimit;
-
+    if (typeof body.watermarkEnabled === 'boolean') {
+      patch.watermarkEnabled = body.watermarkEnabled;
+    }
     if (typeof body.password === 'string' && body.password.length >= 6) {
       const bcrypt = await import('bcryptjs');
       patch.passwordHash = await bcrypt.hash(body.password, 10);
@@ -253,14 +304,15 @@ export async function handleUpdateUser(
 }
 
 export async function handleTrackUsage(
-  body: { kind?: 'imageEdit' | 'modelGen' },
+  body: { kind?: 'geminiEdit' | 'qwenEdit' | 'modelGen' | 'imageEdit' },
   headers: Record<string, string | string[] | undefined>,
 ): Promise<AuthResult> {
   const payload = authFromHeader(headers);
   if (!payload) return fail('未登录或登录已过期', 401);
-  const kind = body.kind;
-  if (kind !== 'imageEdit' && kind !== 'modelGen') {
-    return fail('kind 需为 imageEdit 或 modelGen');
+  let kind = body.kind;
+  if (kind === 'imageEdit') kind = 'geminiEdit';
+  if (kind !== 'geminiEdit' && kind !== 'qwenEdit' && kind !== 'modelGen') {
+    return fail('kind 需为 geminiEdit、qwenEdit 或 modelGen');
   }
   try {
     const { ip, region } = await resolveIpRegion(headers);
@@ -458,7 +510,7 @@ export async function handleSaveDocs(
 /** Pre-flight quota check (no consume). */
 export async function assertUsageFromAuthHeader(
   headers: Record<string, string | string[] | undefined>,
-  kind: 'imageEdit' | 'modelGen',
+  kind: import('./authTypes').UsageKind,
 ): Promise<void> {
   const payload = authFromHeader(headers);
   if (!payload) return; // guest path handled elsewhere
@@ -468,7 +520,7 @@ export async function assertUsageFromAuthHeader(
 /** Used by image-edit routes — consumes daily quota after success. */
 export async function bumpUsageFromAuthHeader(
   headers: Record<string, string | string[] | undefined>,
-  kind: 'imageEdit' | 'modelGen',
+  kind: import('./authTypes').UsageKind,
 ): Promise<PublicUser | null> {
   const payload = authFromHeader(headers);
   if (!payload) return null;

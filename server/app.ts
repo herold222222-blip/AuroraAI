@@ -20,6 +20,7 @@ import {
   handlePublicApis,
   handleRegister,
   handleSaveDocs,
+  handleSendSms,
   handleTrackUsage,
   handleUpdateApi,
   handleUpdateProfile,
@@ -111,6 +112,10 @@ export function createApiApp() {
     const r = await handleRegister(req.body || {}, reqHeaders(req));
     res.status(r.status).json(r.body);
   });
+  app.post('/api/auth/sms/send', async (req, res) => {
+    const r = await handleSendSms(req.body || {}, reqHeaders(req));
+    res.status(r.status).json(r.body);
+  });
   app.post('/api/auth/login', async (req, res) => {
     const r = await handleLogin(req.body || {}, reqHeaders(req));
     res.status(r.status).json(r.body);
@@ -163,8 +168,10 @@ export function createApiApp() {
         res.status(400).json({ error: 'imageDataUrl 与 prompt 必填' });
         return;
       }
+      const { usageKindFromEditModel } = await import('./authTypes');
+      const usageKind = usageKindFromEditModel(body.model);
       try {
-        await assertUsageFromAuthHeader(reqHeaders(req), 'imageEdit');
+        await assertUsageFromAuthHeader(reqHeaders(req), usageKind);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         const status = err instanceof QuotaExceededError ? 403 : 400;
@@ -173,7 +180,7 @@ export function createApiApp() {
       }
       const result = await editImage(body);
       try {
-        await bumpUsageFromAuthHeader(reqHeaders(req), 'imageEdit');
+        await bumpUsageFromAuthHeader(reqHeaders(req), usageKind);
       } catch (err) {
         if (err instanceof QuotaExceededError) {
           res.status(403).json({ error: err.message });

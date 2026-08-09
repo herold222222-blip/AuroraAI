@@ -95,8 +95,10 @@ export async function handler(event: {
       bumpUsageFromAuthHeader,
     } = await import('../../server/authHandlers');
     const { QuotaExceededError } = await import('../../server/userStore');
+    const { usageKindFromEditModel } = await import('../../server/authTypes');
+    const usageKind = usageKindFromEditModel(body.model);
     try {
-      await assertUsageFromAuthHeader(event.headers || {}, 'imageEdit');
+      await assertUsageFromAuthHeader(event.headers || {}, usageKind);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const status = err instanceof QuotaExceededError ? 403 : 400;
@@ -105,7 +107,7 @@ export async function handler(event: {
 
     const result = await editImage(body);
     try {
-      await bumpUsageFromAuthHeader(event.headers || {}, 'imageEdit');
+      await bumpUsageFromAuthHeader(event.headers || {}, usageKind);
     } catch (err) {
       if (err instanceof QuotaExceededError) {
         return json(403, { error: err.message });

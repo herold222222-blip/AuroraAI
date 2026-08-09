@@ -66,7 +66,20 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
 
   return (
     <header className="topbar">
-      <div className="brand">
+      <div
+        className="brand"
+        role="link"
+        tabIndex={0}
+        data-auth-free
+        title="返回主页"
+        onClick={() => goto('home')}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            goto('home');
+          }
+        }}
+      >
         <Logo />
         <span className="brand-name">
           <b>Aurora</b>
@@ -175,7 +188,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
                   onClick={() => {
                     setMenuOpen(false);
                     logout();
-                    goto('upload');
+                    goto('home');
                     pushToast('已退出登录', 'info');
                   }}
                 >

@@ -13,6 +13,7 @@ import {
   handlePublicApis,
   handleRegister,
   handleSaveDocs,
+  handleSendSms,
   handleTrackUsage,
   handleUpdateApi,
   handleUpdateProfile,
@@ -125,6 +126,11 @@ export async function handler(event: {
     if (method === 'POST' && path === '/register') {
       const body = JSON.parse(readRawBody(event) || '{}');
       const r = await handleRegister(body, headers);
+      return json(r.status, r.body);
+    }
+    if (method === 'POST' && path === '/sms/send') {
+      const body = JSON.parse(readRawBody(event) || '{}');
+      const r = await handleSendSms(body, headers);
       return json(r.status, r.body);
     }
     if (method === 'POST' && path === '/login') {

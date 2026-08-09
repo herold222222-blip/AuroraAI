@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
+import { SmsCodeField } from './SmsCodeField';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 import { apiDefaultAvatars, apiGetDocs, type SiteDocs } from '../../api/authApi';
@@ -21,6 +22,12 @@ export function LoginModal() {
   const register = useAuthStore((s) => s.register);
   const busy = useAuthStore((s) => s.busy);
   const pushToast = useAppStore((s) => s.pushToast);
+  const view = useAppStore((s) => s.view);
+  const enterImageModule = useAppStore((s) => s.enterImageModule);
+
+  const afterAuthSuccess = () => {
+    if (view === 'home') enterImageModule();
+  };
 
   const [mode, setMode] = useState<Mode>('login');
   const [username, setUsername] = useState('');
@@ -28,7 +35,9 @@ export function LoginModal() {
   const [password, setPassword] = useState('');
   const [password2, setPassword2] = useState('');
   const [phone, setPhone] = useState('');
+  const [smsCode, setSmsCode] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [docOpen, setDocOpen] = useState<'terms' | 'privacy' | null>(null);
   const [docs, setDocs] = useState<SiteDocs | null>(null);
@@ -44,7 +53,9 @@ export function LoginModal() {
     setPassword('');
     setPassword2('');
     setPhone('');
+    setSmsCode('');
     setError('');
+    setInfo('');
     setAgreeTerms(false);
     setDocOpen(null);
     void apiDefaultAvatars()
@@ -70,6 +81,7 @@ export function LoginModal() {
       const result = await login(username, password);
       if (result.ok) {
         pushToast(`欢迎，${username.trim()}`, 'success');
+        afterAuthSuccess();
         return;
       }
       setError(result.error);
@@ -87,6 +99,10 @@ export function LoginModal() {
       setError('请输入有效的 11 位手机号码');
       return;
     }
+    if (!/^\d{4,8}$/.test(smsCode.trim())) {
+      setError('请输入短信验证码');
+      return;
+    }
     if (!agreeTerms) {
       setError('请先阅读并勾选同意用户须知与隐私协议');
       return;
@@ -97,9 +113,11 @@ export function LoginModal() {
       phone.trim(),
       nickname.trim(),
       avatar,
+      smsCode.trim(),
     );
     if (result.ok) {
       pushToast(`注册成功，欢迎 ${nickname.trim()}`, 'success');
+      afterAuthSuccess();
       return;
     }
     setError(result.error);
@@ -267,9 +285,24 @@ export function LoginModal() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void submit();
                 }}
-                placeholder="11 位手机号（暂不验证）"
+                placeholder="11 位手机号"
               />
             </div>
+            <SmsCodeField
+              phone={phone}
+              purpose="register"
+              code={smsCode}
+              onCodeChange={setSmsCode}
+              disabled={busy}
+              onError={(msg) => {
+                setError(msg);
+                if (msg) setInfo('');
+              }}
+              onInfo={(msg) => {
+                setInfo(msg);
+                setError('');
+              }}
+            />
             <div className="field">
               <label className="field-label">头像</label>
               <div className="auth-avatar-row">
@@ -348,6 +381,7 @@ export function LoginModal() {
           </>
         )}
 
+        {info && !error && <p className="login-info">{info}</p>}
         {error && <p className="login-error">{error}</p>}
       </Modal>
 

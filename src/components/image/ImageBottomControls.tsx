@@ -195,51 +195,52 @@ export function ImageBottomControls() {
   return (
     <div className="img-controls">
       <div className="img-tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            className={tab === t.id ? 'active' : ''}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
+        <div className="img-tabs-nav">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              className={tab === t.id ? 'active' : ''}
+              onClick={() => setTab(t.id)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="img-model-row">
+          <span className="img-model-label">选择模型</span>
+          <div className="img-model-list" role="radiogroup" aria-label="选择模型">
+            {editModels.map((m) => {
+              const active = editModel === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  className={`img-model-option${active ? ' active' : ''}${
+                    m.ready ? '' : ' pending'
+                  }`}
+                  title={m.hint}
+                  onClick={() => setEditModel(m.id)}
+                >
+                  <span className="img-model-option-main">
+                    <b>{m.label}</b>
+                    {active && <span className="img-model-check">✓</span>}
+                  </span>
+                  {!m.ready && (
+                    <span className="img-model-badge">待接入</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       <div className="img-tab-body">
         {tab === 'retouch' && (
           <div className="img-tab-pane">
-            <div className="img-model-row">
-              <span className="img-model-label">选择模型</span>
-              <div className="img-model-list" role="radiogroup" aria-label="选择模型">
-                {editModels.map((m) => {
-                  const active = editModel === m.id;
-                  return (
-                    <button
-                      key={m.id}
-                      type="button"
-                      role="radio"
-                      aria-checked={active}
-                      className={`img-model-option${active ? ' active' : ''}${
-                        m.ready ? '' : ' pending'
-                      }`}
-                      title={m.hint}
-                      onClick={() => setEditModel(m.id)}
-                    >
-                      <span className="img-model-option-main">
-                        <b>{m.label}</b>
-                        {active && <span className="img-model-check">✓</span>}
-                      </span>
-                      {!m.ready && (
-                        <span className="img-model-badge">待接入</span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
             {brushRegions.length > 0 ? (
               <PromptRefZone className="img-hotspot-prompts" disabled={busy}>
                 {brushRegions.map((br) => (

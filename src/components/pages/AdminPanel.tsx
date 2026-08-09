@@ -32,10 +32,13 @@ const ADMIN_DELETE_CODE = '205588';
 type Draft = {
   note: string;
   phone: string;
-  imageUnlimited: boolean;
-  imageLimit: string;
+  geminiUnlimited: boolean;
+  geminiLimit: string;
+  qwenUnlimited: boolean;
+  qwenLimit: string;
   modelUnlimited: boolean;
   modelLimit: string;
+  watermarkEnabled: boolean;
   password: string;
 };
 
@@ -56,14 +59,19 @@ function toDraft(u: AuthUser): Draft {
   return {
     note: u.note || '',
     phone: u.phone || '',
-    imageUnlimited: u.imageEditUnlimited || u.imageEditDailyLimit == null,
-    imageLimit: String(
-      u.imageEditDailyLimit == null ? 20 : u.imageEditDailyLimit,
+    geminiUnlimited: u.geminiEditUnlimited || u.geminiEditDailyLimit == null,
+    geminiLimit: String(
+      u.geminiEditDailyLimit == null ? 5 : u.geminiEditDailyLimit,
+    ),
+    qwenUnlimited: u.qwenEditUnlimited || u.qwenEditDailyLimit == null,
+    qwenLimit: String(
+      u.qwenEditDailyLimit == null ? 20 : u.qwenEditDailyLimit,
     ),
     modelUnlimited: u.modelGenUnlimited || u.modelGenDailyLimit == null,
     modelLimit: String(
       u.modelGenDailyLimit == null ? 20 : u.modelGenDailyLimit,
     ),
+    watermarkEnabled: u.role === 'admin' ? false : u.watermarkEnabled !== false,
     password: '',
   };
 }
@@ -181,16 +189,22 @@ export function AdminPanel() {
       const patch: Parameters<typeof apiUpdateUser>[2] = {
         note: d.note,
         phone: d.phone.trim(),
-        imageEditDailyLimit: u.role === 'admin'
+        geminiEditDailyLimit: u.role === 'admin'
           ? null
-          : d.imageUnlimited
+          : d.geminiUnlimited
             ? null
-            : Math.max(0, Math.floor(Number(d.imageLimit) || 0)),
+            : Math.max(0, Math.floor(Number(d.geminiLimit) || 0)),
+        qwenEditDailyLimit: u.role === 'admin'
+          ? null
+          : d.qwenUnlimited
+            ? null
+            : Math.max(0, Math.floor(Number(d.qwenLimit) || 0)),
         modelGenDailyLimit: u.role === 'admin'
           ? null
           : d.modelUnlimited
             ? null
             : Math.max(0, Math.floor(Number(d.modelLimit) || 0)),
+        watermarkEnabled: u.role === 'admin' ? false : d.watermarkEnabled,
       };
       if (d.password.trim().length >= 6) patch.password = d.password.trim();
       const { user } = await apiUpdateUser(token, u.id, patch);
@@ -454,13 +468,18 @@ export function AdminPanel() {
                 <th className="col-phone">手机号</th>
                 <th className="col-region">地区</th>
                 <th className="col-limit">
-                  图片生成/修改
+                  Gemini
+                  <span>次/天</span>
+                </th>
+                <th className="col-limit">
+                  千问
                   <span>次/天</span>
                 </th>
                 <th className="col-limit">
                   图生模型
                   <span>次/天</span>
                 </th>
+                <th className="col-wm">水印</th>
                 <th className="col-sponsor">累计赞助</th>
                 <th className="col-note">备注</th>
                 <th className="col-pass">重置密码</th>
@@ -514,13 +533,25 @@ export function AdminPanel() {
                     <td className="col-limit">
                       <LimitEditor
                         disabled={isSuper}
-                        unlimited={isSuper || d.imageUnlimited}
-                        limit={d.imageLimit}
-                        used={u.imageEditUsedToday}
+                        unlimited={isSuper || d.geminiUnlimited}
+                        limit={d.geminiLimit}
+                        used={u.geminiEditUsedToday}
                         onUnlimited={(v) =>
-                          setDraft(u.id, { imageUnlimited: v })
+                          setDraft(u.id, { geminiUnlimited: v })
                         }
-                        onLimit={(v) => setDraft(u.id, { imageLimit: v })}
+                        onLimit={(v) => setDraft(u.id, { geminiLimit: v })}
+                      />
+                    </td>
+                    <td className="col-limit">
+                      <LimitEditor
+                        disabled={isSuper}
+                        unlimited={isSuper || d.qwenUnlimited}
+                        limit={d.qwenLimit}
+                        used={u.qwenEditUsedToday}
+                        onUnlimited={(v) =>
+                          setDraft(u.id, { qwenUnlimited: v })
+                        }
+                        onLimit={(v) => setDraft(u.id, { qwenLimit: v })}
                       />
                     </td>
                     <td className="col-limit">
@@ -534,6 +565,24 @@ export function AdminPanel() {
                         }
                         onLimit={(v) => setDraft(u.id, { modelLimit: v })}
                       />
+                    </td>
+                    <td className="col-wm">
+                      {isSuper ? (
+                        <span className="admin-wm-off">无水印</span>
+                      ) : (
+                        <label className="admin-wm-switch">
+                          <input
+                            type="checkbox"
+                            checked={d.watermarkEnabled}
+                            onChange={(e) =>
+                              setDraft(u.id, {
+                                watermarkEnabled: e.target.checked,
+                              })
+                            }
+                          />
+                          <span>{d.watermarkEnabled ? '开启' : '关闭'}</span>
+                        </label>
+                      )}
                     </td>
                     <td className="col-sponsor">
                       <button

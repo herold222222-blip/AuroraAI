@@ -1,7 +1,5 @@
-import { useState, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { useAuthStore } from '../../store/useAuthStore';
-import { Modal } from './Modal';
 
 type NavId =
   | 'project'
@@ -141,24 +139,24 @@ const BOTTOM_NAV: { id: NavId; label: string; icon: ReactNode }[] = [
 export function AppSidebar() {
   const pushToast = useAppStore((s) => s.pushToast);
   const view = useAppStore((s) => s.view);
+  const goto = useAppStore((s) => s.goto);
   const enterImageModule = useAppStore((s) => s.enterImageModule);
   const enterModelModule = useAppStore((s) => s.enterModelModule);
-  const isAdmin = useAuthStore((s) => s.isAdmin);
-  const [modelDevOpen, setModelDevOpen] = useState(false);
 
-  const active: NavId = view === 'image' ? 'image' : 'model';
+  const active: NavId =
+    view === 'image' ? 'image' : view === 'assets' ? 'assets' : 'model';
 
   const onNav = (id: NavId) => {
     if (id === 'model') {
-      if (!isAdmin()) {
-        setModelDevOpen(true);
-        return;
-      }
       enterModelModule();
       return;
     }
     if (id === 'image') {
       enterImageModule();
+      return;
+    }
+    if (id === 'assets') {
+      goto('assets');
       return;
     }
     const labels: Record<NavId, string> = {
@@ -175,61 +173,36 @@ export function AppSidebar() {
   };
 
   return (
-    <>
-      <aside className="app-sidebar" aria-label="主导航" data-auth-free>
-        <div className="app-sidebar-top">
-          {TOP_NAV.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`app-sidebar-btn${active === item.id ? ' active' : ''}`}
-              onClick={() => onNav(item.id)}
-              title={item.label}
-            >
-              <span className="app-sidebar-icon">{item.icon}</span>
-              <span className="app-sidebar-label">{item.label}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="app-sidebar-bottom">
-          {BOTTOM_NAV.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`app-sidebar-btn${active === item.id ? ' active' : ''}`}
-              onClick={() => onNav(item.id)}
-              title={item.label}
-            >
-              <span className="app-sidebar-icon">{item.icon}</span>
-              <span className="app-sidebar-label">{item.label}</span>
-            </button>
-          ))}
-        </div>
-      </aside>
-
-      {modelDevOpen && (
-        <div data-auth-free>
-          <Modal
-            title="功能提示"
-            width={420}
-            onClose={() => setModelDevOpen(false)}
-            footer={
-              <button
-                type="button"
-                className="btn holo"
-                onClick={() => setModelDevOpen(false)}
-              >
-                我知道了
-              </button>
-            }
+    <aside className="app-sidebar" aria-label="主导航" data-auth-free>
+      <div className="app-sidebar-top">
+        {TOP_NAV.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`app-sidebar-btn${active === item.id ? ' active' : ''}`}
+            onClick={() => onNav(item.id)}
+            title={item.label}
           >
-            <p className="quota-modal-text">
-              当前功能正在开发中，如需更多帮助请联系万生19806651984。
-            </p>
-          </Modal>
-        </div>
-      )}
-    </>
+            <span className="app-sidebar-icon">{item.icon}</span>
+            <span className="app-sidebar-label">{item.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="app-sidebar-bottom">
+        {BOTTOM_NAV.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`app-sidebar-btn${active === item.id ? ' active' : ''}`}
+            onClick={() => onNav(item.id)}
+            title={item.label}
+          >
+            <span className="app-sidebar-icon">{item.icon}</span>
+            <span className="app-sidebar-label">{item.label}</span>
+          </button>
+        ))}
+      </div>
+    </aside>
   );
 }

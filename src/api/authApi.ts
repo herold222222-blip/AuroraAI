@@ -20,12 +20,17 @@ export interface AuthUser {
   note: string;
   lastIp: string;
   lastRegion: string;
-  imageEditDailyLimit: number | null;
+  geminiEditDailyLimit: number | null;
+  qwenEditDailyLimit: number | null;
   modelGenDailyLimit: number | null;
-  imageEditUsedToday: number;
+  geminiEditUsedToday: number;
+  qwenEditUsedToday: number;
   modelGenUsedToday: number;
-  imageEditUnlimited: boolean;
+  geminiEditUnlimited: boolean;
+  qwenEditUnlimited: boolean;
   modelGenUnlimited: boolean;
+  /** 普通用户 AI 出图是否带水印；管理员恒为 false */
+  watermarkEnabled: boolean;
   sponsorshipTotal: number;
   sponsorships: SponsorshipRecord[];
   createdAt: number;
@@ -70,22 +75,54 @@ export async function apiLogin(username: string, password: string) {
   });
 }
 
+export type SmsPurpose = 'register' | 'change_phone';
+
+export async function apiSendSms(
+  phone: string,
+  purpose: SmsPurpose,
+  token?: string | null,
+) {
+  return request<{
+    cooldownSec: number;
+    expiresInSec: number;
+    provider: 'aliyun' | 'dev';
+    devCode?: string;
+  }>(
+    '/sms/send',
+    { method: 'POST', body: JSON.stringify({ phone, purpose }) },
+    token,
+  );
+}
+
 export async function apiRegister(
   username: string,
   password: string,
   phone: string,
   nickname: string,
-  avatar?: string,
+  avatar: string | undefined,
+  smsCode: string,
 ) {
   return request<{ token: string; user: AuthUser }>('/register', {
     method: 'POST',
-    body: JSON.stringify({ username, password, phone, nickname, avatar }),
+    body: JSON.stringify({
+      username,
+      password,
+      phone,
+      nickname,
+      avatar,
+      smsCode,
+    }),
   });
 }
 
 export async function apiUpdateProfile(
   token: string,
-  patch: { nickname?: string; avatar?: string; phone?: string },
+  patch: {
+    nickname?: string;
+    avatar?: string;
+    phone?: string;
+    smsCode?: string;
+  },
 ) {
   return request<{ user: AuthUser }>(
     '/profile',
@@ -125,8 +162,10 @@ export async function apiUpdateUser(
     note?: string;
     avatar?: string;
     phone?: string;
-    imageEditDailyLimit?: number | null;
+    geminiEditDailyLimit?: number | null;
+    qwenEditDailyLimit?: number | null;
     modelGenDailyLimit?: number | null;
+    watermarkEnabled?: boolean;
     password?: string;
   },
 ) {
@@ -169,7 +208,7 @@ export async function apiDeleteDonation(
 
 export async function apiTrackUsage(
   token: string,
-  kind: 'imageEdit' | 'modelGen',
+  kind: 'geminiEdit' | 'qwenEdit' | 'modelGen',
 ) {
   return request<{ user: AuthUser }>(
     '/track',

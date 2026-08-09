@@ -5,6 +5,7 @@ import { compressDataUrl } from '../../image/padImage';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Modal } from './Modal';
+import { SmsCodeField } from './SmsCodeField';
 
 const FALLBACK_AVATARS = [
   '/avatars/default-1.svg',
@@ -20,18 +21,22 @@ function formatLimit(unlimited: boolean, limit: number | null | undefined) {
 
 export function ProfileModal({ onClose }: { onClose: () => void }) {
   const user = useAuthStore((s) => s.user);
+  const token = useAuthStore((s) => s.token);
   const updateProfile = useAuthStore((s) => s.updateProfile);
   const busy = useAuthStore((s) => s.busy);
   const pushToast = useAppStore((s) => s.pushToast);
 
   const [nickname, setNickname] = useState(user?.nickname || '');
   const [phone, setPhone] = useState(user?.phone || '');
+  const [smsCode, setSmsCode] = useState('');
   const [avatar, setAvatar] = useState(
     user?.avatar || FALLBACK_AVATARS[0],
   );
   const [avatars, setAvatars] = useState<string[]>(FALLBACK_AVATARS);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
+  const phoneChanged = phone.trim() !== (user?.phone || '').trim();
 
   useEffect(() => {
     void apiDefaultAvatars()
@@ -73,10 +78,15 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
       setError('请输入有效的 11 位手机号码');
       return;
     }
+    if (phoneChanged && !/^\d{4,8}$/.test(smsCode.trim())) {
+      setError('修改手机号需填写短信验证码');
+      return;
+    }
     const result = await updateProfile({
       nickname: nickname.trim(),
       phone: phone.trim(),
       avatar,
+      ...(phoneChanged ? { smsCode: smsCode.trim() } : {}),
     });
     if (!result.ok) {
       setError(result.error);
@@ -133,12 +143,32 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
             inputMode="numeric"
             maxLength={11}
             value={phone}
-            onChange={(e) =>
-              setPhone(e.target.value.replace(/\D/g, '').slice(0, 11))
-            }
+            onChange={(e) => {
+              setPhone(e.target.value.replace(/\D/g, '').slice(0, 11));
+              setSmsCode('');
+              setInfo('');
+            }}
             placeholder="11 位手机号"
           />
         </div>
+        {phoneChanged && (
+          <SmsCodeField
+            phone={phone}
+            purpose="change_phone"
+            code={smsCode}
+            onCodeChange={setSmsCode}
+            token={token}
+            disabled={busy}
+            onError={(msg) => {
+              setError(msg);
+              if (msg) setInfo('');
+            }}
+            onInfo={(msg) => {
+              setInfo(msg);
+              setError('');
+            }}
+          />
+        )}
         <div className="field">
           <label className="field-label">头像</label>
           <div className="auth-avatar-row">
@@ -177,6 +207,7 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
             />
           </div>
         </div>
+        {info && !error && <p className="login-info">{info}</p>}
         {error && <p className="login-error">{error}</p>}
       </Modal>
     </div>
@@ -208,23 +239,50 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
       >
         <div className="usage-cards">
           <div className="usage-card">
-            <h4>图片生成 / 修改</h4>
+            <h4>Gemini 改图</h4>
             <p>
               限额：
               <strong>
-                {formatLimit(user.imageEditUnlimited, user.imageEditDailyLimit)}
+                {formatLimit(
+                  user.geminiEditUnlimited,
+                  user.geminiEditDailyLimit,
+                )}
               </strong>
             </p>
             <p>
               已用：
-              <strong>{user.imageEditUsedToday}</strong>
-              {!user.imageEditUnlimited && user.imageEditDailyLimit != null && (
+              <strong>{user.geminiEditUsedToday}</strong>
+              {!user.geminiEditUnlimited &&
+                user.geminiEditDailyLimit != null && (
+                  <span className="usage-remain">
+                    {' '}
+                    · 剩余{' '}
+                    {Math.max(
+                      0,
+                      user.geminiEditDailyLimit - user.geminiEditUsedToday,
+                    )}
+                  </span>
+                )}
+            </p>
+          </div>
+          <div className="usage-card">
+            <h4>千问改图</h4>
+            <p>
+              限额：
+              <strong>
+                {formatLimit(user.qwenEditUnlimited, user.qwenEditDailyLimit)}
+              </strong>
+            </p>
+            <p>
+              已用：
+              <strong>{user.qwenEditUsedToday}</strong>
+              {!user.qwenEditUnlimited && user.qwenEditDailyLimit != null && (
                 <span className="usage-remain">
                   {' '}
                   · 剩余{' '}
                   {Math.max(
                     0,
-                    user.imageEditDailyLimit - user.imageEditUsedToday,
+                    user.qwenEditDailyLimit - user.qwenEditUsedToday,
                   )}
                 </span>
               )}
@@ -276,6 +334,31 @@ export function QuotaExhaustedModal() {
         }
       >
         <p className="quota-modal-text">{QUOTA_EXCEEDED_HINT}</p>
+      </Modal>
+    </div>
+  );
+}
+
+/** Shown when a non-admin tries to enter 图生模型 / 3D generation. */
+export function ModelDevBlockedModal() {
+  const open = useAppStore((s) => s.modelDevBlockedOpen);
+  const close = useAppStore((s) => s.closeModelDevBlocked);
+  if (!open) return null;
+  return (
+    <div data-auth-free>
+      <Modal
+        title="功能提示"
+        width={420}
+        onClose={close}
+        footer={
+          <button type="button" className="btn holo" onClick={close}>
+            我知道了
+          </button>
+        }
+      >
+        <p className="quota-modal-text">
+          当前功能正在开发中，如需更多帮助请联系万生19806651984。
+        </p>
       </Modal>
     </div>
   );

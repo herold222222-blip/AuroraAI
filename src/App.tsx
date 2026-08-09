@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from './store/useAppStore';
+import { HomePage } from './components/pages/HomePage';
 import { UploadPage } from './components/pages/UploadPage';
 import { AnalysisTransition } from './components/pages/AnalysisTransition';
 import { Workbench2D } from './components/pages/Workbench2D';
@@ -7,12 +8,16 @@ import { BuildTransition } from './components/pages/BuildTransition';
 import { Workbench3D } from './components/pages/Workbench3D';
 import { ImageWorkbench } from './components/pages/ImageWorkbench';
 import { AdminPanel } from './components/pages/AdminPanel';
+import { AssetsPanel } from './components/pages/AssetsPanel';
 import { Toasts } from './components/common/Toasts';
 import { AppSidebar } from './components/common/AppSidebar';
 import { TopBar } from './components/common/TopBar';
 import { AuthGuard } from './components/common/AuthGuard';
 import { LoginModal } from './components/common/LoginModal';
-import { QuotaExhaustedModal } from './components/common/AccountModals';
+import {
+  ModelDevBlockedModal,
+  QuotaExhaustedModal,
+} from './components/common/AccountModals';
 import { ProjectPromoteModal } from './components/common/ProjectPromoteModal';
 import { ImageDownloadProvider } from './components/common/ImageDownloadContext';
 import { useAuthStore } from './store/useAuthStore';
@@ -79,6 +84,21 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo, requireAuth]);
 
+  if (view === 'home') {
+    return (
+      <ImageDownloadProvider>
+        <div className="app-shell home-shell">
+          <AuthGuard />
+          <LoginModal />
+          <QuotaExhaustedModal />
+          <ModelDevBlockedModal />
+          <HomePage />
+          <Toasts />
+        </div>
+      </ImageDownloadProvider>
+    );
+  }
+
   const topBar =
     view === 'image' ? (
       <TopBar variant="workbench" workbenchSuffix="AI 图像编辑" />
@@ -92,6 +112,8 @@ export default function App() {
       <TopBar variant="workbench" workbenchSuffix="三维构建" />
     ) : view === 'admin' ? (
       <TopBar variant="workbench" workbenchSuffix="管理后台" />
+    ) : view === 'assets' ? (
+      <TopBar variant="workbench" workbenchSuffix="资产" />
     ) : (
       <TopBar variant="workbench" workbenchSuffix="图生模型" />
     );
@@ -102,6 +124,7 @@ export default function App() {
         <AuthGuard />
         <LoginModal />
         <QuotaExhaustedModal />
+        <ModelDevBlockedModal />
         <ProjectPromoteModal />
         {topBar}
         <div className="app-body">
@@ -115,6 +138,7 @@ export default function App() {
             {view === 'workbench3d' && <Workbench3D />}
             {view === 'image' && <ImageWorkbench />}
             {view === 'admin' && <AdminPanel />}
+            {view === 'assets' && <AssetsPanel />}
             <Toasts />
           </div>
         </div>

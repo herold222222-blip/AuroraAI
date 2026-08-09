@@ -10,6 +10,7 @@ import {
   measureSticker,
   type ImageOverlay,
 } from './overlayCompose';
+import { registerGeneratedImage } from '../store/useAssetStore';
 
 export type { ImageOverlay };
 
@@ -229,6 +230,8 @@ interface ImageState {
 
   materials: MaterialItem[];
   materialDrawerOpen: boolean;
+  /** Mobile: album / results sheet open over the canvas. */
+  mobileAlbumOpen: boolean;
   /** 2D cutout stickers placed on the canvas (plants / people / custom PNG). */
   overlays: ImageOverlay[];
   selectedOverlayId: string | null;
@@ -281,6 +284,7 @@ interface ImageState {
   setBusy: (v: boolean) => void;
   setPrompt: (v: string) => void;
   setMaterialDrawerOpen: (v: boolean) => void;
+  setMobileAlbumOpen: (v: boolean) => void;
   addOverlayFromUrl: (url: string, label?: string) => Promise<void>;
   updateOverlay: (id: string, patch: Partial<ImageOverlay>) => void;
   removeOverlay: (id: string) => void;
@@ -313,6 +317,8 @@ interface ImageState {
   removeSourceAlbum: (id: string) => void;
   renameSavedImage: (id: string, label: string) => void;
   removeSavedImage: (id: string) => void;
+  /** Remove results matching urls or ids from saved list and all albums (asset sync). */
+  removeResultsByRefs: (refs: { ids?: string[]; urls?: string[] }) => void;
   /**
    * Add a generation result as a new entry in 原图列表 and switch to it.
    * Keeps the previous album and its results intact.
@@ -380,6 +386,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
 
   materials: [],
   materialDrawerOpen: false,
+  mobileAlbumOpen: false,
   overlays: [],
   selectedOverlayId: null,
 
@@ -537,6 +544,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
   setBusy: (v) => set({ busy: v }),
   setPrompt: (v) => set({ prompt: v }),
   setMaterialDrawerOpen: (v) => set({ materialDrawerOpen: v }),
+  setMobileAlbumOpen: (v) => set({ mobileAlbumOpen: v }),
 
   addOverlayFromUrl: async (url, label) => {
     const base = get().currentUrl;
@@ -919,6 +927,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
     const promptUsed =
       opts?.prompt?.trim() || get().lastGeneratePrompt || get().prompt || undefined;
     const last = savedImages[savedImages.length - 1];
+    let newShot: SavedEditImage | null = null;
     if (!last || last.url !== url) {
       const n = savedImages.length + 1;
       const shot: SavedEditImage = {
@@ -929,6 +938,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
         sourceSnapshotId: get().sourceSnapshotId ?? undefined,
         prompt: promptUsed,
       };
+      newShot = shot;
       savedImages = [...savedImages, shot].slice(-40);
       if (activeId) {
         sourceAlbums = sourceAlbums.map((a) =>
@@ -955,6 +965,15 @@ export const useImageStore = create<ImageState>((set, get) => ({
       overlays: [],
       selectedOverlayId: null,
     });
+    if (newShot) {
+      registerGeneratedImage({
+        id: newShot.id,
+        url: newShot.url,
+        label: newShot.label,
+        prompt: newShot.prompt,
+        createdAt: newShot.createdAt,
+      });
+    }
   },
 
   undo: () => {
@@ -1083,6 +1102,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       label: label || `结果 ${n}`,
       createdAt: Date.now(),
       sourceSnapshotId: get().sourceSnapshotId ?? undefined,
+      prompt: get().lastGeneratePrompt || get().prompt || undefined,
     };
     const savedImages = [...get().savedImages, shot].slice(-40);
     const activeId = get().activeSourceId;
@@ -1094,6 +1114,13 @@ export const useImageStore = create<ImageState>((set, get) => ({
           ? { ...a, results: savedImages.map((r) => ({ ...r })) }
           : a,
       ),
+    });
+    registerGeneratedImage({
+      id: shot.id,
+      url: shot.url,
+      label: shot.label,
+      prompt: shot.prompt,
+      createdAt: shot.createdAt,
     });
   },
 
@@ -1107,6 +1134,21 @@ export const useImageStore = create<ImageState>((set, get) => ({
           ? { ...a, results: savedImages.map((r) => ({ ...r })) }
           : a,
       ),
+    });
+  },
+
+  removeResultsByRefs: ({ ids, urls }) => {
+    const idSet = new Set(ids || []);
+    const urlSet = new Set(urls || []);
+    if (!idSet.size && !urlSet.size) return;
+    const drop = (r: SavedEditImage) => idSet.has(r.id) || urlSet.has(r.url);
+    const savedImages = get().savedImages.filter((r) => !drop(r));
+    set({
+      savedImages,
+      sourceAlbums: get().sourceAlbums.map((a) => ({
+        ...a,
+        results: a.results.filter((r) => !drop(r)),
+      })),
     });
   },
 
@@ -1206,6 +1248,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       overlays: [],
       selectedOverlayId: null,
       materialDrawerOpen: false,
+      mobileAlbumOpen: false,
     });
   },
 }));
