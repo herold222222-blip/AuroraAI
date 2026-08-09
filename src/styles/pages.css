@@ -2067,6 +2067,7 @@
   justify-content: center;
 }
 .img-stage-frame {
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
@@ -2075,17 +2076,20 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(10px);
+  /* Opaque-enough fill — avoid backdrop-filter on the image parent (blurs children in Chromium). */
+  background: #f3f5f8;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 10px;
   box-sizing: border-box;
+}
+.img-stage-frame.is-transformed {
   will-change: transform;
 }
 .img-stage-media {
   position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2093,6 +2097,15 @@
   max-height: 100%;
   min-width: 0;
   min-height: 0;
+}
+/* Tight wrapper around the bitmap so overlays/cursors share the image box. */
+.img-paint-surface {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  max-height: 100%;
+  line-height: 0;
 }
 .img-main {
   display: block;
@@ -2103,13 +2116,17 @@
   object-fit: contain;
   border-radius: 8px;
   user-select: none;
+  image-rendering: auto;
+  image-rendering: high-quality;
 }
 .img-mask-canvas {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  left: 0;
+  top: 0;
   border-radius: 8px;
+  pointer-events: none;
+  z-index: 1;
+  /* width/height set in px from JS to match the image layout box 1:1 */
 }
 .img-hotspot {
   position: absolute;
@@ -2268,13 +2285,20 @@
   align-items: center;
   justify-content: center;
 }
-.img-tool-btn:hover {
+.img-tool-btn:hover:not(:disabled) {
   background: var(--canvas);
 }
-.img-tool-btn.active {
+.img-tool-btn.active:not(:disabled) {
   background: var(--holo-soft);
   border-color: var(--holo);
   color: var(--holo-deep);
+}
+.img-tool-btn:disabled {
+  color: #b0b6c0;
+  background: #eef0f4;
+  border-color: transparent;
+  opacity: 0.72;
+  cursor: not-allowed;
 }
 .img-brush-size {
   display: flex;
@@ -3047,10 +3071,58 @@
 .img-crop-wrap {
   display: none;
 }
-.img-wm-btn.on {
-  border-color: color-mix(in srgb, var(--holo) 35%, var(--line));
-  color: var(--holo-deep);
-  background: color-mix(in srgb, var(--holo) 8%, transparent);
+.img-wm-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+.img-wm-switch-track {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: #c9d0d8;
+  border: 1px solid rgba(20, 28, 45, 0.08);
+  transition: background 0.18s ease, border-color 0.18s ease;
+  flex-shrink: 0;
+}
+.img-wm-switch-dot {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(20, 28, 45, 0.22);
+  transition: transform 0.18s ease;
+}
+.img-wm-switch.is-on .img-wm-switch-track {
+  background: var(--holo, #22c3e8);
+  border-color: transparent;
+}
+.img-wm-switch.is-on .img-wm-switch-dot {
+  transform: translateX(16px);
+}
+.img-wm-switch.is-on {
+  color: var(--holo-deep, #0e7490);
+}
+.img-wm-switch-label {
+  white-space: nowrap;
+}
+.img-wm-switch:hover .img-wm-switch-track {
+  filter: brightness(0.97);
 }
 
 .img-footer-bar {

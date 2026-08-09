@@ -517,9 +517,13 @@ export function AdminPanel() {
                     <td className="col-phone">
                       <input
                         className="input admin-phone"
+                        type="tel"
+                        inputMode="numeric"
                         value={d.phone}
-                        placeholder="手机号"
+                        placeholder="11 位手机号"
                         maxLength={11}
+                        size={11}
+                        title={d.phone || '手机号'}
                         onChange={(e) =>
                           setDraft(u.id, {
                             phone: e.target.value.replace(/\D/g, '').slice(0, 11),

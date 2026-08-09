@@ -12,6 +12,11 @@ export interface EditRequest {
   systemHint?: string;
   /** banana-gemini | qwen-image — qwen wired when API is provided */
   model?: string;
+  /**
+   * Client baked a translucent red edit guide onto imageDataUrl (Qwen path).
+   * Do not attach maskDataUrl as a second content image.
+   */
+  visualGuideBaked?: boolean;
 }
 
 function sleep(ms: number) {
@@ -70,13 +75,21 @@ export function buildEditPrompt(req: EditRequest): string {
     parts.push(
       [
         'IMAGE 1 = original photo to edit.',
-        'IMAGE 2 = binary edit mask (white/bright = MUST edit; black/dark = MUST NOT change).',
+        'IMAGE 2 = binary edit mask (white/bright = allowed edit zone; black/dark = MUST NOT change).',
         'STRICT RULES:',
         '- Modify ONLY white/bright mask pixels according to the user instruction.',
         '- Black/dark mask pixels must stay pixel-identical to IMAGE 1 (same RGB).',
         '- Do not spill edits across mask edges; do not alter unmasked objects, sky, ground, or lighting globally.',
         '- Keep full-frame size identical to IMAGE 1.',
         '- This may be one step in a sequence of local edits; do not drift geometry or restyle outside the mask.',
+        '- SCENE FUSION (critical when adding people/objects): the white mask is a permission zone, NOT a blank canvas.',
+        '  Insert new subjects into IMAGE 1\'s real surfaces (pavement, grass, water, floor, wall).',
+        '  Keep or regenerate the original scene texture under/around the new subject inside the mask.',
+        '  Match scene perspective, scale, sunlight direction, shadows, and color grade.',
+        '  FORBIDDEN inside the mask: solid white/gray fill, studio backdrop, oval cutout halo, floating sticker look, or erased ground replaced by empty white.',
+        '- COMPLETE FIGURE INSIDE MASK: any added person/object must appear fully intact within the white region.',
+        '  Do not crop arms, legs, feet, heads, or props at the mask edge — scale the whole subject to fit inside.',
+        '  A slightly smaller but complete subject is always better than a truncated one.',
         req.hotspot
           ? `- Focus near pixel (${Math.round(req.hotspot.x)}, ${Math.round(req.hotspot.y)}) (mask centroid); prefer the material under that point within the white mask.`
           : '',

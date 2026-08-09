@@ -1,13 +1,10 @@
 import { useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
-import { useAuthStore } from '../../store/useAuthStore';
 import { useImageStore } from '../../image/useImageStore';
 import { downloadImage } from '../../utils/downloadImage';
 
 export function ImageFooterBar() {
   const pushToast = useAppStore((s) => s.pushToast);
-  const user = useAuthStore((s) => s.user);
-  const isAdmin = useAuthStore((s) => s.isAdmin);
   const undo = useImageStore((s) => s.undo);
   const redo = useImageStore((s) => s.redo);
   const past = useImageStore((s) => s.past);
@@ -32,8 +29,6 @@ export function ImageFooterBar() {
     Boolean(sourceSnapshotId) ||
     sourceAlbums.some((a) => Boolean(a.sourceSnapshotId));
   const listLabel = snapshotMode ? '快照列表' : '原图列表';
-  const watermarkOn =
-    !isAdmin() && (user?.watermarkEnabled !== false);
 
   return (
     <div className="img-footer-bar">
@@ -64,18 +59,6 @@ export function ImageFooterBar() {
       >
         {showCompare ? '关闭对比' : '前后对比'}
       </button>
-      {!isAdmin() && (
-        <button
-          type="button"
-          className={`btn ghost sm img-wm-btn${watermarkOn ? ' on' : ''}`}
-          title={watermarkOn ? '水印已开启' : '水印已关闭'}
-          onClick={() =>
-            pushToast('如需关闭水印请联系万生19806651984。', 'info')
-          }
-        >
-          水印 {watermarkOn ? '开' : '关'}
-        </button>
-      )}
       <input
         ref={fileRef}
         type="file"

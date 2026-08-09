@@ -3,6 +3,7 @@ import { convertToPixelCrop, cropToImg } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { apiPublicApis } from '../../api/authApi';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 import { useImageStore } from '../../image/useImageStore';
 import {
   reportAiEditError,
@@ -87,9 +88,13 @@ export function ImageBottomControls() {
   const upsertCustomStyle = useImageStore((s) => s.upsertCustomStyle);
   const removeCustomStyle = useImageStore((s) => s.removeCustomStyle);
   const pushToast = useAppStore((s) => s.pushToast);
+  const user = useAuthStore((s) => s.user);
+  const isAdmin = useAuthStore((s) => s.isAdmin);
   const editModel = useImageStore((s) => s.editModel);
   const setEditModel = useImageStore((s) => s.setEditModel);
   const [enabledKinds, setEnabledKinds] = useState<Set<string> | null>(null);
+  const watermarkOn = !isAdmin() && user?.watermarkEnabled !== false;
+  const showWatermarkSwitch = Boolean(user) && !isAdmin();
 
   useEffect(() => {
     void apiPublicApis()
@@ -209,6 +214,23 @@ export function ImageBottomControls() {
           ))}
         </div>
         <div className="img-model-row">
+          {showWatermarkSwitch && (
+            <button
+              type="button"
+              className={`img-wm-switch${watermarkOn ? ' is-on' : ''}`}
+              role="switch"
+              aria-checked={watermarkOn}
+              title={watermarkOn ? '水印已开启' : '水印已关闭'}
+              onClick={() =>
+                pushToast('如需关闭水印请联系万生19806651984。', 'info')
+              }
+            >
+              <span className="img-wm-switch-track" aria-hidden>
+                <span className="img-wm-switch-dot" />
+              </span>
+              <span className="img-wm-switch-label">水印</span>
+            </button>
+          )}
           <span className="img-model-label">选择模型</span>
           <div className="img-model-list" role="radiogroup" aria-label="选择模型">
             {editModels.map((m) => {

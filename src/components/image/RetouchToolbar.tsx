@@ -5,10 +5,17 @@ export function RetouchToolbar() {
   const tab = useImageStore((s) => s.tab);
   const tool = useImageStore((s) => s.retouchTool);
   const setTool = useImageStore((s) => s.setRetouchTool);
+  const editModel = useImageStore((s) => s.editModel);
   const brushSize = useImageStore((s) => s.brushSize);
   const setBrushSize = useImageStore((s) => s.setBrushSize);
   const sketchBrushSize = useImageStore((s) => s.sketchBrushSize);
   const setSketchBrushSize = useImageStore((s) => s.setSketchBrushSize);
+
+  const isQwen = editModel === 'qwen-image';
+  /** Gemini: brush disabled — use sketch marks instead. */
+  const brushDisabled = !isQwen;
+  /** Qwen: sketch marks disabled — use brush instead. */
+  const sketchDisabled = isQwen;
 
   useEffect(() => {
     if (tab !== 'retouch') return;
@@ -28,6 +35,13 @@ export function RetouchToolbar() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tab, setTool]);
+
+  // Leave a tool that the current model does not support.
+  useEffect(() => {
+    if (tab !== 'retouch') return;
+    if (brushDisabled && tool === 'brush') setTool('select');
+    if (sketchDisabled && tool === 'point') setTool('select');
+  }, [tab, tool, brushDisabled, sketchDisabled, setTool]);
 
   if (tab !== 'retouch') {
     /* Keep layout slot so switching tabs does not move/resize the canvas. */
@@ -54,8 +68,16 @@ export function RetouchToolbar() {
       <button
         type="button"
         className={`img-tool-btn${tool === 'brush' ? ' active' : ''}`}
-        title="涂抹工具（不相连区域自动编号；Shift+点击可删除某区域）"
-        onClick={() => setTool('brush')}
+        title={
+          brushDisabled
+            ? '涂抹工具在 Gemini 模型下不可用，请切换到 Qwen'
+            : '涂抹工具（不相连区域自动编号；Shift+点击可删除某区域）'
+        }
+        disabled={brushDisabled}
+        aria-disabled={brushDisabled}
+        onClick={() => {
+          if (!brushDisabled) setTool('brush');
+        }}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
           <path
@@ -67,8 +89,16 @@ export function RetouchToolbar() {
       <button
         type="button"
         className={`img-tool-btn${tool === 'point' ? ' active' : ''}`}
-        title="素描标记（按住左键连续勾画红色笔迹；每次笔画为独立编号标记；Shift+点击可删除）"
-        onClick={() => setTool('point')}
+        title={
+          sketchDisabled
+            ? '素描标记在 Qwen 模型下不可用，请切换到 Gemini'
+            : '素描标记（按住左键连续勾画红色笔迹；每次笔画为独立编号标记；Shift+点击可删除）'
+        }
+        disabled={sketchDisabled}
+        aria-disabled={sketchDisabled}
+        onClick={() => {
+          if (!sketchDisabled) setTool('point');
+        }}
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
           <path

@@ -117,6 +117,34 @@ export function connectedComponents(
   return regions;
 }
 
+/** Axis-aligned bounds of white mask pixels, optionally padded. */
+export function maskBounds(
+  mask: Uint8Array,
+  w: number,
+  h: number,
+  pad = 0,
+): { x: number; y: number; w: number; h: number } | null {
+  let minX = w;
+  let minY = h;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!mask[y * w + x]) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return null;
+  const x0 = Math.max(0, minX - pad);
+  const y0 = Math.max(0, minY - pad);
+  const x1 = Math.min(w, maxX + 1 + pad);
+  const y1 = Math.min(h, maxY + 1 + pad);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
 export function maskCentroid(
   mask: Uint8Array,
   w: number,

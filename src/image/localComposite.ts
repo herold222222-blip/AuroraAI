@@ -400,6 +400,33 @@ export async function compositeHotspotLocal(
 }
 
 /**
+ * How much to trust an edited pixel vs original.
+ * Rejects flat near-white "cutout backdrop" fills that replaced darker scene content
+ * (common failure when models treat the brush mask as a blank canvas).
+ * Returns 0..1 (0 = keep original, 1 = fully trust edit).
+ */
+function editTrustWeight(
+  er: number,
+  eg: number,
+  eb: number,
+  or: number,
+  og: number,
+  ob: number,
+): number {
+  const eMin = Math.min(er, eg, eb);
+  const eMax = Math.max(er, eg, eb);
+  const eLum = (er + eg + eb) / 3;
+  const oLum = (or + og + ob) / 3;
+  const chroma = eMax - eMin;
+  // Only reject near-pure flat white studio fill (not light clothing/skin).
+  if (eMin >= 248 && chroma <= 10 && oLum < eLum - 45) {
+    const whiteness = (eMin - 248) / (255 - 248);
+    return Math.max(0, 1 - Math.min(1, whiteness) * 1.35);
+  }
+  return 1;
+}
+
+/**
  * Strict composite: outside the mask (black), keep original pixels 100%.
  */
 export async function compositeLocalStrict(
@@ -407,7 +434,9 @@ export async function compositeLocalStrict(
   editedUrl: string,
   maskUrl: string,
   feather?: number,
+  opts?: { rejectWhiteCutout?: boolean },
 ): Promise<string> {
+  const rejectWhite = opts?.rejectWhiteCutout !== false;
   const [orig, edited, maskImg] = await Promise.all([
     loadImageEl(originalUrl),
     loadImageEl(editedUrl),
@@ -449,14 +478,87 @@ export async function compositeLocalStrict(
   const out = base.data;
   const e = ed.data;
   for (let p = 0, i = 0; p < w * h; p++, i += 4) {
-    const a = soft[p];
+    let a = soft[p];
     if (a <= 0.01) continue;
+    if (rejectWhite) {
+      a *= editTrustWeight(
+        e[i],
+        e[i + 1],
+        e[i + 2],
+        out[i],
+        out[i + 1],
+        out[i + 2],
+      );
+      if (a <= 0.01) continue;
+    }
     out[i] = Math.round(out[i] * (1 - a) + e[i] * a);
     out[i + 1] = Math.round(out[i + 1] * (1 - a) + e[i + 1] * a);
     out[i + 2] = Math.round(out[i + 2] * (1 - a) + e[i + 2] * a);
   }
 
   ctx.putImageData(base, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+/** Crop a rectangular region from an image (or mask) data URL. */
+export async function cropImageRect(
+  imageUrl: string,
+  box: { x: number; y: number; w: number; h: number },
+): Promise<string> {
+  const img = await loadImageEl(imageUrl);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(box.w));
+  canvas.height = Math.max(1, Math.round(box.h));
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(
+    img,
+    box.x,
+    box.y,
+    box.w,
+    box.h,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  return canvas.toDataURL('image/png');
+}
+
+/** Upscale so the short side is at least minSide (Qwen size floor). */
+export async function upscaleToMinSide(
+  imageUrl: string,
+  minSide = 512,
+): Promise<string> {
+  const img = await loadImageEl(imageUrl);
+  const m = Math.min(img.naturalWidth, img.naturalHeight);
+  if (m >= minSide) return imageUrl;
+  const scale = minSide / m;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/png');
+}
+
+/** Paste an edited patch into a full-frame copy of the original at `box`. */
+export async function pasteImageRect(
+  baseUrl: string,
+  patchUrl: string,
+  box: { x: number; y: number; w: number; h: number },
+): Promise<string> {
+  const [base, patch] = await Promise.all([
+    loadImageEl(baseUrl),
+    loadImageEl(patchUrl),
+  ]);
+  const canvas = document.createElement('canvas');
+  canvas.width = base.naturalWidth;
+  canvas.height = base.naturalHeight;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(base, 0, 0);
+  ctx.drawImage(patch, box.x, box.y, box.w, box.h);
   return canvas.toDataURL('image/png');
 }
 
@@ -506,4 +608,81 @@ export async function padMaskToCanvas(
   const { x, y, w, h } = pad.originalCrop;
   ctx.drawImage(mask, x, y, w, h);
   return out.toDataURL('image/png');
+}
+
+/**
+ * Bake a translucent red edit-zone onto the photo for models (e.g. Qwen)
+ * that treat multi-image inputs as content references, not binary masks.
+ */
+export async function bakeMaskOverlayOntoImage(
+  imageUrl: string,
+  maskUrl: string,
+  alpha = 0.42,
+): Promise<string> {
+  const [img, maskImg] = await Promise.all([
+    loadImageEl(imageUrl),
+    loadImageEl(maskUrl),
+  ]);
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(img, 0, 0, w, h);
+
+  const mc = document.createElement('canvas');
+  mc.width = w;
+  mc.height = h;
+  const mcx = mc.getContext('2d', { willReadFrequently: true })!;
+  mcx.drawImage(maskImg, 0, 0, w, h);
+  const md = mcx.getImageData(0, 0, w, h);
+  const overlay = ctx.getImageData(0, 0, w, h);
+  const a = Math.min(1, Math.max(0, alpha));
+  for (let i = 0; i < md.data.length; i += 4) {
+    const lit = (md.data[i] + md.data[i + 1] + md.data[i + 2]) / 3;
+    if (lit < 40) continue;
+    const t = (lit / 255) * a;
+    overlay.data[i] = Math.round(overlay.data[i] * (1 - t) + 239 * t);
+    overlay.data[i + 1] = Math.round(overlay.data[i + 1] * (1 - t) + 68 * t);
+    overlay.data[i + 2] = Math.round(overlay.data[i + 2] * (1 - t) + 68 * t);
+  }
+  ctx.putImageData(overlay, 0, 0);
+  return canvas.toDataURL('image/png');
+}
+
+/**
+ * Slightly expand a brush mask so complete subjects (limbs, feet, props)
+ * near the painted edge are not clipped by strict composite.
+ */
+export async function expandNaturalMaskForLocalEdit(
+  naturalMaskUrl: string,
+  radiusPx?: number,
+): Promise<string> {
+  const maskImg = await loadImageEl(naturalMaskUrl);
+  const w = maskImg.naturalWidth;
+  const h = maskImg.naturalHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+  ctx.drawImage(maskImg, 0, 0);
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const data = imgData.data;
+  const binary = new Uint8Array(w * h);
+  for (let p = 0, i = 0; p < w * h; p++, i += 4) {
+    binary[p] = data[i] > 127 ? 1 : 0;
+  }
+  const radius =
+    radiusPx ?? Math.max(10, Math.round(Math.min(w, h) * 0.022));
+  const expanded = dilateBinary(binary, w, h, radius);
+  for (let p = 0, i = 0; p < w * h; p++, i += 4) {
+    const v = expanded[p] ? 255 : 0;
+    data[i] = v;
+    data[i + 1] = v;
+    data[i + 2] = v;
+    data[i + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return canvas.toDataURL('image/png');
 }

@@ -531,7 +531,8 @@ select {
   white-space: nowrap;
 }
 .admin-table .col-phone {
-  min-width: 132px;
+  min-width: 168px;
+  width: 168px;
 }
 .admin-table .col-region {
   min-width: 88px;
@@ -667,7 +668,10 @@ select {
   height: 34px;
 }
 .admin-phone {
-  width: 120px;
+  width: 152px;
+  min-width: 152px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 .admin-limit {
   display: flex;

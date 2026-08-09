@@ -6,11 +6,17 @@ import { requestImageEdit, type ImageEditPayload } from './imageApi';
 import { useImageStore, type HotspotPoint } from './useImageStore';
 import {
   dataUrlToBinaryMask,
+  maskBounds,
   maskCentroid,
 } from './brushRegions';
 import {
+  bakeMaskOverlayOntoImage,
   compositeLocalStrict,
+  cropImageRect,
+  expandNaturalMaskForLocalEdit,
   padMaskToCanvas,
+  pasteImageRect,
+  upscaleToMinSide,
 } from './localComposite';
 import { bakeSketchMarksOntoImage } from './bakeSketchMarks';
 import { applyAuroraWatermark } from './auroraWatermark';
@@ -44,7 +50,16 @@ const LOCAL_SYSTEM = `CRITICAL LOCAL EDIT CONSTRAINTS (must obey strictly):
 3. Do not restyle, recolor, relight, or remodel anything outside the allowed region.
 4. Do not change camera, crop, or aspect. Output the full frame at the same size as the input.
 5. Prefer seamless blending only at the boundary of the allowed region.
-6. This may be one step in a sequence of brush/mask edits — never drift prior edits or global look.`;
+6. This may be one step in a sequence of brush/mask edits — never drift prior edits or global look.
+7. INSERT / ADD elements (people, furniture, props, etc.): place them INTO the existing scene from IMAGE 1.
+   - Reconstruct matching ground, pavement, water, walls, and lighting from IMAGE 1 in any allowed pixels not occupied by the new subject.
+   - Match perspective, scale, light direction, color temperature, and contact shadows of the surrounding scene.
+   - NEVER fill the mask with solid white, gray, studio backdrop, cutout halo, or any flat empty background.
+   - The mask only marks WHERE edits are allowed — it is NOT a white canvas to paint on.
+8. COMPLETE SUBJECT INSIDE THE MASK (critical):
+   - The entire added subject must fit fully inside the white/bright mask — head to toe / full object, no cropped limbs.
+   - Scale and compose so nothing important is cut off by the mask boundary (no missing arms, legs, feet, or props).
+   - Prefer a slightly smaller subject that is complete over a larger subject that is truncated.`;
 
 /** Matches Gemini app sketch/markup editing: ink is on the photo. */
 const SKETCH_MARKUP_SYSTEM = `GEMINI-STYLE SKETCH / MARKUP EDIT (must obey strictly):
@@ -153,36 +168,67 @@ export async function runAiEdit(opts: {
     );
   }
 
+  const isQwen = editModel === 'qwen-image';
+
+  // Resolve natural brush mask early (before pad) so Qwen can use ROI crop-edit.
+  let naturalMaskUrl: string | undefined;
+  const maskExpandRadius = (nw: number, nh: number) => {
+    const m = Math.min(nw, nh);
+    return isQwen
+      ? Math.max(18, Math.round(m * 0.038))
+      : Math.max(10, Math.round(m * 0.022));
+  };
+
+  if (opts.naturalMaskUrl) {
+    const { w: mw, h: mh } = await loadSize(opts.naturalMaskUrl);
+    naturalMaskUrl = await expandNaturalMaskForLocalEdit(
+      opts.naturalMaskUrl,
+      maskExpandRadius(mw, mh),
+    );
+  } else if (
+    !opts.forceGlobal &&
+    !opts.isolated &&
+    state.brushRegions.length === 1
+  ) {
+    const srcMask = state.brushRegions[0].maskDataUrl;
+    const { w: mw, h: mh } = await loadSize(srcMask);
+    naturalMaskUrl = await expandNaturalMaskForLocalEdit(
+      srcMask,
+      maskExpandRadius(mw, mh),
+    );
+  } else if (
+    !opts.forceGlobal &&
+    !opts.isolated &&
+    state.brushRegions.length > 1
+  ) {
+    throw new Error('存在多个涂抹区域，请在各区域填写要求后点「应用」');
+  }
+
+  // Qwen: crop the brush bbox, edit that patch, paste back — full-frame red
+  // guides often make Qwen only erase the tint with no real content change.
+  if (isQwen && naturalMaskUrl) {
+    return finish(
+      await runQwenBrushRoiEdit({
+        imageUrl: current,
+        naturalMaskUrl,
+        prompt: opts.prompt,
+        materialRefs: refs,
+      }),
+    );
+  }
+
   const pad = await padToSupportedRatio(current);
   const size = await loadSize(current);
 
   let mode: ImageEditPayload['mode'] = 'global';
   let hotspot: ImageEditPayload['hotspot'];
   let maskDataUrl: string | undefined;
-  let naturalMaskUrl: string | undefined;
   let local = false;
 
-  if (opts.naturalMaskUrl) {
-    naturalMaskUrl = opts.naturalMaskUrl;
+  if (naturalMaskUrl) {
     maskDataUrl = await padMaskToCanvas(naturalMaskUrl, pad);
     mode = 'mask';
     local = true;
-  } else if (
-    !opts.forceGlobal &&
-    !opts.isolated &&
-    state.brushRegions.length === 1
-  ) {
-    naturalMaskUrl = state.brushRegions[0].maskDataUrl;
-    maskDataUrl = await padMaskToCanvas(naturalMaskUrl, pad);
-    mode = 'mask';
-    local = true;
-  } else if (
-    !opts.forceGlobal &&
-    !opts.isolated &&
-    state.brushRegions.length > 1
-  ) {
-    // Never silently fall through to global edit when multiple brush regions exist.
-    throw new Error('存在多个涂抹区域，请在各区域填写要求后点「应用」');
   }
 
   if (local && mode === 'mask' && !maskDataUrl) {
@@ -205,7 +251,12 @@ export async function runAiEdit(opts: {
     : opts.systemHint;
 
   const userPrompt = local
-    ? `LOCAL EDIT ONLY — apply this change exclusively inside the allowed region:\n${opts.prompt}`
+    ? [
+        'LOCAL EDIT ONLY — apply this change exclusively inside the allowed region.',
+        'If adding/inserting a subject: generate the COMPLETE subject fully inside the mask (no missing limbs or cropped parts); scale to fit.',
+        'Fuse into IMAGE 1 scene content (ground/water/walls/light). No white/flat cutout backgrounds.',
+        `Instruction:\n${opts.prompt}`,
+      ].join('\n')
     : opts.prompt;
 
   const result = await requestImageEdit({
@@ -234,6 +285,48 @@ export async function runAiEdit(opts: {
     );
   }
   return finish(cropped);
+}
+
+/**
+ * Qwen brush path: edit a cropped ROI of the smear region, then paste + mask-composite.
+ * Avoids full-frame “only remove red tint” no-op failures.
+ */
+async function runQwenBrushRoiEdit(opts: {
+  imageUrl: string;
+  naturalMaskUrl: string;
+  prompt: string;
+  materialRefs: string[];
+}): Promise<string> {
+  const { mask, w, h } = await dataUrlToBinaryMask(opts.naturalMaskUrl);
+  const padPx = Math.max(28, Math.round(Math.min(w, h) * 0.05));
+  const box = maskBounds(mask, w, h, padPx);
+  if (!box || box.w < 8 || box.h < 8) {
+    throw new Error('涂抹区域无效，请重新涂抹后再试');
+  }
+
+  const cropUrl = await cropImageRect(opts.imageUrl, box);
+  const cropMaskUrl = await cropImageRect(opts.naturalMaskUrl, box);
+  const guided = await bakeMaskOverlayOntoImage(cropUrl, cropMaskUrl, 0.48);
+  const sendUrl = await upscaleToMinSide(guided, 512);
+
+  const result = await requestImageEdit({
+    imageDataUrl: sendUrl,
+    prompt: [
+      '这是涂抹区域的局部图，整张图都需要按要求编辑。',
+      '必须产生明显可见的变化，不能几乎等于原图。',
+      '若增加人物/物体：在图中生成完整主体（含双腿双脚），与地面融合，不要白底。',
+      `具体要求：${opts.prompt.trim()}`,
+    ].join('\n'),
+    mode: 'mask',
+    visualGuideBaked: true,
+    materialRefs: opts.materialRefs.length ? opts.materialRefs : undefined,
+    model: 'qwen-image',
+  });
+
+  const pasted = await pasteImageRect(opts.imageUrl, result.imageDataUrl, box);
+  return compositeLocalStrict(opts.imageUrl, pasted, opts.naturalMaskUrl, undefined, {
+    rejectWhiteCutout: false,
+  });
 }
 
 /**
@@ -287,13 +380,23 @@ export async function runSketchMarkupEdit(
   const refs =
     materialRefs ?? useImageStore.getState().selectedMaterialUrls();
 
+  const editModel = useImageStore.getState().editModel ?? 'banana-gemini';
+  const isQwen = editModel === 'qwen-image';
+  // Sketch ink is already baked on the photo; Qwen gets Chinese prompt server-side.
   const result = await requestImageEdit({
     imageDataUrl: pad.dataUrl,
-    prompt: userPrompt,
-    systemHint: [SKETCH_MARKUP_SYSTEM, systemHint].filter(Boolean).join('\n\n'),
+    prompt: isQwen
+      ? [
+          ...points.map((p) => `标记${p.n}：${p.prompt.trim()}`),
+          '请按上述标记逐一修改对应主体，并去除全部红色标注。',
+        ].join('\n')
+      : userPrompt,
+    systemHint: isQwen
+      ? systemHint
+      : [SKETCH_MARKUP_SYSTEM, systemHint].filter(Boolean).join('\n\n'),
     mode: 'sketch',
     materialRefs: refs.length ? refs : undefined,
-    model: useImageStore.getState().editModel ?? 'banana-gemini',
+    model: editModel,
   });
 
   const cropped = await cropFromPadSized(

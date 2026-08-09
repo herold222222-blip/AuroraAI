@@ -483,7 +483,10 @@ export const useImageStore = create<ImageState>((set, get) => ({
     set({ hotspots: renumber(list.slice(0, -1)) });
   },
 
-  clearHotspots: () => set({ hotspots: [] }),
+  clearHotspots: () => {
+    if (!get().hotspots.length) return;
+    set({ hotspots: [] });
+  },
 
   setHotspotPrompt: (id, prompt) =>
     set({
@@ -531,7 +534,10 @@ export const useImageStore = create<ImageState>((set, get) => ({
     set({ brushRegions: next, hasMask: next.length > 0 });
   },
 
-  clearBrushRegions: () => set({ brushRegions: [], hasMask: false }),
+  clearBrushRegions: () => {
+    if (!get().brushRegions.length && !get().hasMask) return;
+    set({ brushRegions: [], hasMask: false });
+  },
 
   setBrushRegionPrompt: (id, prompt) =>
     set({
@@ -1009,12 +1015,21 @@ export const useImageStore = create<ImageState>((set, get) => ({
   },
 
   resetToOriginal: () => {
-    const { originalUrl, currentUrl } = get();
-    if (!originalUrl || !currentUrl || originalUrl === currentUrl) return;
+    const { originalUrl, currentUrl, hotspots, brushRegions, hasMask } = get();
+    if (!originalUrl || !currentUrl) return;
+    const imageChanged = currentUrl !== originalUrl;
+    const hasMarks =
+      hotspots.length > 0 || brushRegions.length > 0 || hasMask;
+    // Still clear sketch/brush marks when already viewing the original.
+    if (!imageChanged && !hasMarks) return;
     set({
-      past: [...get().past, { url: currentUrl }],
-      future: [],
-      currentUrl: originalUrl,
+      ...(imageChanged
+        ? {
+            past: [...get().past, { url: currentUrl }],
+            future: [] as { url: string }[],
+            currentUrl: originalUrl,
+          }
+        : {}),
       showCompare: false,
       hotspots: [],
       brushRegions: [],

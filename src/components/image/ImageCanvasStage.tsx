@@ -88,6 +88,7 @@ export function ImageCanvasStage() {
   const compareRef = useRef<HTMLDivElement>(null);
   const [split, setSplit] = useState(50);
   const [compareW, setCompareW] = useState(0);
+  /** Brush cursor position as % of the paint surface (0–100). */
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [viewScale, setViewScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -155,9 +156,18 @@ export function ImageCanvasStage() {
     ): boolean => {
       const img = imgRef.current;
       if (!img || !canvas) return false;
+      // Match the image's layout box exactly (avoid stretching via inset:0 on a larger parent).
       const w = Math.max(1, Math.round(img.clientWidth));
       const h = Math.max(1, Math.round(img.clientHeight));
-      if (canvas.width === w && canvas.height === h) return false;
+      const cssChanged =
+        canvas.style.width !== `${w}px` || canvas.style.height !== `${h}px`;
+      if (cssChanged) {
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+        canvas.style.left = '0';
+        canvas.style.top = '0';
+      }
+      if (canvas.width === w && canvas.height === h) return cssChanged;
       let backup: HTMLCanvasElement | null = null;
       if (
         opts?.preserve &&
@@ -222,6 +232,16 @@ export function ImageCanvasStage() {
 
   useEffect(() => {
     void refreshOverlay();
+    if (!brushRegions.length && !hotspots.length) {
+      // Brush strokes call clearHotspots() while painting — do not wipe the
+      // in-progress canvas or abort the gesture when marks become empty.
+      if (painting.current || strokeDirty.current) return;
+      lastPaint.current = null;
+      const stroke = strokeRef.current;
+      if (stroke) {
+        stroke.getContext('2d')!.clearRect(0, 0, stroke.width, stroke.height);
+      }
+    }
   }, [brushRegions, hotspots, refreshOverlay]);
 
   useEffect(() => {
@@ -360,17 +380,23 @@ export function ImageCanvasStage() {
     }
     const rect = img.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    // Visual rect accounts for CSS zoom/pan; map back to layout/canvas space
+    // Visual rect includes CSS zoom/pan; map back into layout/canvas pixels.
     const nx = (clientX - rect.left) / rect.width;
     const ny = (clientY - rect.top) / rect.height;
-    if (nx < 0 || ny < 0 || nx > 1 || ny > 1) return null;
+    if (nx < -0.02 || ny < -0.02 || nx > 1.02 || ny > 1.02) return null;
+    const clampedX = Math.min(1, Math.max(0, nx));
+    const clampedY = Math.min(1, Math.max(0, ny));
+    const layoutW = img.clientWidth || rect.width;
+    const layoutH = img.clientHeight || rect.height;
     const natW = img.naturalWidth;
     const natH = img.naturalHeight;
     return {
-      x: Math.min(natW - 1e-3, Math.max(0, nx * natW)),
-      y: Math.min(natH - 1e-3, Math.max(0, ny * natH)),
-      lx: nx * img.clientWidth,
-      ly: ny * img.clientHeight,
+      x: Math.min(natW - 1e-3, Math.max(0, clampedX * natW)),
+      y: Math.min(natH - 1e-3, Math.max(0, clampedY * natH)),
+      lx: clampedX * layoutW,
+      ly: clampedY * layoutH,
+      pctX: clampedX * 100,
+      pctY: clampedY * 100,
     };
   };
 
@@ -430,12 +456,6 @@ export function ImageCanvasStage() {
     }
 
     strokeDirty.current = true;
-    if (!isSketch) {
-      clearHotspots();
-    } else if (useImageStore.getState().brushRegions.length) {
-      useImageStore.getState().clearBrushRegions();
-      setHasMask(false);
-    }
   };
 
   const finalizeStroke = useCallback(() => {
@@ -557,6 +577,13 @@ export function ImageCanvasStage() {
     painting.current = true;
     paintingTool.current = retouchTool;
     lastPaint.current = null;
+    // Drop the other mark type once when a stroke begins (not on every move).
+    if (retouchTool === 'brush') {
+      if (useImageStore.getState().hotspots.length) clearHotspots();
+    } else if (useImageStore.getState().brushRegions.length) {
+      useImageStore.getState().clearBrushRegions();
+      setHasMask(false);
+    }
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -578,7 +605,7 @@ export function ImageCanvasStage() {
       setCursor(null);
       return;
     }
-    setCursor({ x: p.lx, y: p.ly });
+    setCursor({ x: p.pctX, y: p.pctY });
     if (painting.current) paintStrokeAt(p.lx, p.ly);
   };
 
@@ -636,11 +663,15 @@ export function ImageCanvasStage() {
       )}
       <div className="img-stage-stack">
       <div
-        className="img-stage-frame"
-        style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewScale})`,
-          transformOrigin: 'center center',
-        }}
+        className={`img-stage-frame${viewAltered ? ' is-transformed' : ''}`}
+        style={
+          viewAltered
+            ? {
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewScale})`,
+                transformOrigin: 'center center',
+              }
+            : undefined
+        }
       >
         <div
           className={`img-stage-media${tab === 'crop' ? ' is-cropping' : ''}${
@@ -742,7 +773,7 @@ export function ImageCanvasStage() {
               />
             </ReactCrop>
           ) : (
-            <>
+            <div className="img-paint-surface">
               {mainImage}
               <ImageOverlayLayer imageSize={imageSize} />
               <canvas
@@ -797,8 +828,8 @@ export function ImageCanvasStage() {
                     retouchTool === 'point' ? ' is-sketch' : ''
                   }`}
                   style={{
-                    left: cursor.x,
-                    top: cursor.y,
+                    left: `${cursor.x}%`,
+                    top: `${cursor.y}%`,
                     width:
                       retouchTool === 'point' ? sketchBrushSize : brushSize,
                     height:
@@ -806,7 +837,7 @@ export function ImageCanvasStage() {
                   }}
                 />
               )}
-            </>
+            </div>
           )}
         </div>
       </div>

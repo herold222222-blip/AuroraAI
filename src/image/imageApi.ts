@@ -8,6 +8,8 @@ export interface ImageEditPayload {
   systemHint?: string;
   /** Image edit backend: banana-gemini (default) or qwen-image */
   model?: string;
+  /** Red edit guide already painted onto imageDataUrl (Qwen local path). */
+  visualGuideBaked?: boolean;
 }
 
 const NETLIFY_SAFE_BYTES = 5.5 * 1024 * 1024;
