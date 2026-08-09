@@ -5,6 +5,7 @@ import { apiPublicApis } from '../../api/authApi';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import {
+  reportAiEditError,
   runAiEdit,
   runMultiBrushEdits,
   runMultiHotspotEdits,
@@ -146,7 +147,7 @@ export function ImageBottomControls() {
       });
       pushToast('生成完成', 'success');
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error');
+      reportAiEditError(err, pushToast);
     } finally {
       setBusy(false);
     }
@@ -169,7 +170,7 @@ export function ImageBottomControls() {
         'success',
       );
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error');
+      reportAiEditError(err, pushToast);
     } finally {
       setBusy(false);
     }
@@ -186,7 +187,7 @@ export function ImageBottomControls() {
         'success',
       );
     } catch (err) {
-      pushToast(err instanceof Error ? err.message : String(err), 'error');
+      reportAiEditError(err, pushToast);
     } finally {
       setBusy(false);
     }
@@ -369,7 +370,7 @@ export function ImageBottomControls() {
                     commitImage(refined, { compareFrom: currentUrl });
                     pushToast('已生成 4K', 'success');
                   } catch (err) {
-                    pushToast(err instanceof Error ? err.message : String(err), 'error');
+                    reportAiEditError(err, pushToast);
                   } finally {
                     setBusy(false);
                   }
@@ -569,10 +570,7 @@ export function ImageBottomControls() {
                     'success',
                   );
                 } catch (err) {
-                  pushToast(
-                    err instanceof Error ? err.message : String(err),
-                    'error',
-                  );
+                  reportAiEditError(err, pushToast);
                 } finally {
                   setBusy(false);
                 }

@@ -1,6 +1,6 @@
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
-import { runAiEdit } from '../../image/runAiEdit';
+import { reportAiEditError, runAiEdit } from '../../image/runAiEdit';
 
 /** Compact regenerate control, placed directly under the canvas image. */
 export function ImageRegenerateBar() {
@@ -42,7 +42,7 @@ export function ImageRegenerateBar() {
         commitImage(out, { compareFrom: originalUrl, prompt: p });
         pushToast('已重新生成', 'success');
       } catch (err) {
-        pushToast(err instanceof Error ? err.message : String(err), 'error');
+        reportAiEditError(err, pushToast);
       } finally {
         setBusy(false);
       }

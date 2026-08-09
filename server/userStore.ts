@@ -394,7 +394,7 @@ export type UserPatch = Partial<
 >;
 
 export const QUOTA_EXCEEDED_MESSAGE =
-  '您目前账户的限额已经使用完，请明天更新后再来使用。如需更多帮助请联系万生19806651984。';
+  '目前您的免费额度已经全部用完，请等待明天更新，或者联系万生：19806651984.';
 
 export async function updateUser(
   id: string,

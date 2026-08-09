@@ -29,7 +29,10 @@ export function RetouchToolbar() {
     return () => window.removeEventListener('keydown', onKey);
   }, [tab, setTool]);
 
-  if (tab !== 'retouch') return null;
+  if (tab !== 'retouch') {
+    /* Keep layout slot so switching tabs does not move/resize the canvas. */
+    return <div className="img-retouch-toolbar is-placeholder" aria-hidden />;
+  }
 
   return (
     <div className="img-retouch-toolbar">

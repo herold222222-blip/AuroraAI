@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { apiDefaultAvatars } from '../../api/authApi';
-import { QUOTA_EXCEEDED_HINT } from '../../api/authApi';
+import {
+  apiDefaultAvatars,
+  GEMINI_TO_QWEN_HINT,
+  QUOTA_EXCEEDED_HINT,
+} from '../../api/authApi';
 import { compressDataUrl } from '../../image/padImage';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { useImageStore } from '../../image/useImageStore';
 import { Modal } from './Modal';
 import { SmsCodeField } from './SmsCodeField';
 
@@ -319,21 +323,38 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
 
 export function QuotaExhaustedModal() {
   const open = useAuthStore((s) => s.quotaOpen);
+  const kind = useAuthStore((s) => s.quotaModalKind);
   const close = useAuthStore((s) => s.closeQuotaModal);
+  const setEditModel = useImageStore((s) => s.setEditModel);
+  const pushToast = useAppStore((s) => s.pushToast);
+
   if (!open) return null;
+
+  const switchToQwen = kind === 'switchToQwen';
+
+  const onConfirm = () => {
+    if (switchToQwen) {
+      setEditModel('qwen-image');
+      pushToast('已切换到千问模型', 'success');
+    }
+    close();
+  };
+
   return (
     <div data-auth-free>
       <Modal
-        title="账户限额已用完"
+        title={switchToQwen ? 'Gemini 额度已用完' : '账户限额已用完'}
         width={440}
         onClose={close}
         footer={
-          <button type="button" className="btn holo" onClick={close}>
-            我知道了
+          <button type="button" className="btn holo" onClick={onConfirm}>
+            确认
           </button>
         }
       >
-        <p className="quota-modal-text">{QUOTA_EXCEEDED_HINT}</p>
+        <p className="quota-modal-text">
+          {switchToQwen ? GEMINI_TO_QWEN_HINT : QUOTA_EXCEEDED_HINT}
+        </p>
       </Modal>
     </div>
   );

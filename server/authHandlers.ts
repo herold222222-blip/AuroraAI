@@ -85,7 +85,6 @@ export async function handleSendSms(
     cooldownSec: result.cooldownSec,
     expiresInSec: result.expiresInSec,
     provider: result.provider,
-    ...(result.devCode ? { devCode: result.devCode } : {}),
   });
 }
 

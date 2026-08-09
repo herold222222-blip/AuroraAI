@@ -810,7 +810,9 @@ export function ImageCanvasStage() {
           )}
         </div>
       </div>
-      <ImageRegenerateBar />
+      <div className="img-regen-slot">
+        <ImageRegenerateBar />
+      </div>
       </div>
     </div>
   );

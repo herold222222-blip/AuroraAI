@@ -72,7 +72,10 @@ export async function requestImageEdit(payload: ImageEditPayload): Promise<{
     if (data.error) {
       try {
         const { useAuthStore } = await import('../store/useAuthStore');
-        useAuthStore.getState().notifyQuotaError(data.error);
+        const { isQuotaExceededMessage } = await import('../api/authApi');
+        if (res.status === 403 || isQuotaExceededMessage(data.error)) {
+          await useAuthStore.getState().handleEditQuotaError(payload.model);
+        }
       } catch {
         /* ignore */
       }

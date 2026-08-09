@@ -44,12 +44,7 @@ export function SmsCodeField({
     try {
       const r = await apiSendSms(phone.trim(), purpose, token);
       setCooldown(r.cooldownSec || 60);
-      if (r.devCode) {
-        onInfo?.(`开发模式验证码：${r.devCode}`);
-        onCodeChange(r.devCode);
-      } else {
-        onInfo?.('验证码已发送，请查收短信');
-      }
+      onInfo?.('验证码已发送，请查收短信');
     } catch (err) {
       const msg = err instanceof Error ? err.message : '发送失败';
       onError?.(msg);

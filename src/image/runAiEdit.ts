@@ -16,6 +16,15 @@ import { bakeSketchMarksOntoImage } from './bakeSketchMarks';
 import { applyAuroraWatermark } from './auroraWatermark';
 import { useAuthStore } from '../store/useAuthStore';
 
+/** Suppress duplicate toasts when a quota modal is already open. */
+export function reportAiEditError(
+  err: unknown,
+  pushToast: (msg: string, type?: 'error' | 'info' | 'success' | 'warning') => void,
+) {
+  if (useAuthStore.getState().quotaOpen) return;
+  pushToast(err instanceof Error ? err.message : String(err), 'error');
+}
+
 /** Admin never watermarks; regular users follow account setting (default on). */
 function shouldApplyWatermark(): boolean {
   const user = useAuthStore.getState().user;
@@ -74,6 +83,31 @@ export async function runAiEdit(opts: {
 }): Promise<string> {
   const state = useImageStore.getState();
   const editModel = state.editModel ?? 'banana-gemini';
+
+  // Client-side quota gate: Gemini → offer Qwen; both out → full exhausted dialog.
+  const auth = useAuthStore.getState();
+  if (auth.user && auth.user.role !== 'admin') {
+    const { isEditQuotaExhausted } = await import('../api/authApi');
+    const geminiDone = isEditQuotaExhausted(auth.user, 'gemini');
+    const qwenDone = isEditQuotaExhausted(auth.user, 'qwen');
+    if (editModel !== 'qwen-image' && geminiDone) {
+      await auth.handleEditQuotaError('banana-gemini');
+      throw new Error(
+        qwenDone
+          ? '目前您的免费额度已经全部用完，请等待明天更新，或者联系万生：19806651984.'
+          : '您的Gemini免费额度已经用完，当前自动切换到千问模型',
+      );
+    }
+    if (editModel === 'qwen-image' && qwenDone) {
+      await auth.handleEditQuotaError('qwen-image');
+      throw new Error(
+        geminiDone
+          ? '目前您的免费额度已经全部用完，请等待明天更新，或者联系万生：19806651984.'
+          : '千问免费额度已用完，请切换到 Gemini 模型后再试',
+      );
+    }
+  }
+
   const working =
     opts.imageUrl ??
     (await state.getWorkingImageUrl()) ??

@@ -85,8 +85,7 @@ export async function apiSendSms(
   return request<{
     cooldownSec: number;
     expiresInSec: number;
-    provider: 'aliyun' | 'dev';
-    devCode?: string;
+    provider: 'aliyun';
   }>(
     '/sms/send',
     { method: 'POST', body: JSON.stringify({ phone, purpose }) },
@@ -132,15 +131,37 @@ export async function apiUpdateProfile(
 }
 
 export const QUOTA_EXCEEDED_HINT =
-  '您目前账户的限额已经使用完，请明天更新后再来使用。如需更多帮助请联系万生19806651984。';
+  '目前您的免费额度已经全部用完，请等待明天更新，或者联系万生：19806651984.';
+
+export const GEMINI_TO_QWEN_HINT =
+  '您的Gemini免费额度已经用完，当前自动切换到千问模型';
+
+export type QuotaModalKind = 'allExhausted' | 'switchToQwen';
 
 export function isQuotaExceededMessage(msg: string | undefined | null): boolean {
   if (!msg) return false;
   return (
     msg.includes('限额已经使用完') ||
+    msg.includes('免费额度已经') ||
     msg.includes('次数已用完') ||
     msg.includes('QuotaExceeded')
   );
+}
+
+/** Whether a regular user's daily edit quota for a model family is exhausted. */
+export function isEditQuotaExhausted(
+  user: AuthUser | null | undefined,
+  kind: 'gemini' | 'qwen',
+): boolean {
+  if (!user || user.role === 'admin') return false;
+  if (kind === 'gemini') {
+    if (user.geminiEditUnlimited || user.geminiEditDailyLimit == null) {
+      return false;
+    }
+    return user.geminiEditUsedToday >= user.geminiEditDailyLimit;
+  }
+  if (user.qwenEditUnlimited || user.qwenEditDailyLimit == null) return false;
+  return user.qwenEditUsedToday >= user.qwenEditDailyLimit;
 }
 
 export async function apiMe(token: string) {

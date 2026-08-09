@@ -5,8 +5,10 @@ import {
   apiRegister,
   apiTrackUsage,
   apiUpdateProfile,
+  isEditQuotaExhausted,
   isQuotaExceededMessage,
   type AuthUser,
+  type QuotaModalKind,
 } from '../api/authApi';
 
 const STORAGE_KEY = 'aurora-auth-v2';
@@ -52,11 +54,14 @@ interface AuthState {
   loginOpen: boolean;
   busy: boolean;
   quotaOpen: boolean;
+  quotaModalKind: QuotaModalKind;
   openLogin: () => void;
   closeLogin: () => void;
-  openQuotaModal: () => void;
+  openQuotaModal: (kind?: QuotaModalKind) => void;
   closeQuotaModal: () => void;
   notifyQuotaError: (message?: string) => boolean;
+  /** After image-edit 403: switch-to-Qwen or all-exhausted modal. */
+  handleEditQuotaError: (model?: string | null) => Promise<void>;
   login: (
     username: string,
     password: string,
@@ -92,15 +97,47 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   loginOpen: false,
   busy: false,
   quotaOpen: false,
+  quotaModalKind: 'allExhausted',
 
   openLogin: () => set({ loginOpen: true }),
   closeLogin: () => set({ loginOpen: false }),
-  openQuotaModal: () => set({ quotaOpen: true }),
-  closeQuotaModal: () => set({ quotaOpen: false }),
+  openQuotaModal: (kind = 'allExhausted') =>
+    set({ quotaOpen: true, quotaModalKind: kind }),
+  closeQuotaModal: () =>
+    set({ quotaOpen: false, quotaModalKind: 'allExhausted' }),
   notifyQuotaError: (message) => {
     if (!isQuotaExceededMessage(message)) return false;
-    set({ quotaOpen: true });
+    set({ quotaOpen: true, quotaModalKind: 'allExhausted' });
     return true;
+  },
+
+  handleEditQuotaError: async (model) => {
+    try {
+      await get().refreshMe();
+    } catch {
+      /* keep cached user */
+    }
+    const user = get().user;
+    if (!user || user.role === 'admin') return;
+
+    const failedGemini = model !== 'qwen-image';
+    const qwenDone = isEditQuotaExhausted(user, 'qwen');
+    const geminiDone = isEditQuotaExhausted(user, 'gemini');
+
+    if (failedGemini) {
+      // Gemini just rejected — treat as exhausted even if client count lags.
+      if (qwenDone) {
+        set({ quotaOpen: true, quotaModalKind: 'allExhausted' });
+      } else {
+        set({ quotaOpen: true, quotaModalKind: 'switchToQwen' });
+      }
+      return;
+    }
+
+    // Qwen rejected: only show the full-exhausted dialog when Gemini is also out.
+    if (geminiDone) {
+      set({ quotaOpen: true, quotaModalKind: 'allExhausted' });
+    }
   },
 
   login: async (username, password) => {
@@ -174,7 +211,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: () => {
     persist(null);
-    set({ token: null, user: null, username: null, quotaOpen: false });
+    set({
+      token: null,
+      user: null,
+      username: null,
+      quotaOpen: false,
+      quotaModalKind: 'allExhausted',
+    });
   },
 
   requireAuth: () => {

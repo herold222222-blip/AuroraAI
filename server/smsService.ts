@@ -1,6 +1,5 @@
 /**
- * SMS OTP for register / change-phone.
- * When Aliyun env vars are set, sends via Dysmsapi; otherwise logs the code (dev fallback).
+ * SMS OTP for register / change-phone via Aliyun Dysmsapi.
  */
 import crypto from 'node:crypto';
 
@@ -36,13 +35,6 @@ function aliyunConfigured(): boolean {
       process.env.ALIYUN_SMS_SIGN_NAME &&
       process.env.ALIYUN_SMS_TEMPLATE_CODE,
   );
-}
-
-function exposeDevCode(): boolean {
-  if (process.env.SMS_DEV_EXPOSE_CODE === '0') return false;
-  if (process.env.SMS_DEV_MODE === '1') return true;
-  if (process.env.NODE_ENV === 'production' && aliyunConfigured()) return false;
-  return !aliyunConfigured();
 }
 
 function percentEncode(s: string): string {
@@ -109,9 +101,7 @@ export type SendSmsResult =
       ok: true;
       cooldownSec: number;
       expiresInSec: number;
-      provider: 'aliyun' | 'dev';
-      /** Only present in local/dev when Aliyun is not configured. */
-      devCode?: string;
+      provider: 'aliyun';
     }
   | { ok: false; error: string; cooldownSec?: number };
 
@@ -122,6 +112,9 @@ export async function sendSmsCode(
   const phone = phoneRaw.trim();
   if (!isValidCnPhone(phone)) {
     return { ok: false, error: '请输入有效的 11 位手机号码' };
+  }
+  if (!aliyunConfigured()) {
+    return { ok: false, error: '短信服务未配置，请联系管理员' };
   }
 
   const k = key(phone, purpose);
@@ -145,14 +138,8 @@ export async function sendSmsCode(
     attempts: 0,
   };
 
-  let provider: 'aliyun' | 'dev' = 'dev';
   try {
-    if (aliyunConfigured()) {
-      await sendViaAliyun(phone, code);
-      provider = 'aliyun';
-    } else {
-      console.info(`[sms:dev] purpose=${purpose} phone=${phone} code=${code}`);
-    }
+    await sendViaAliyun(phone, code);
   } catch (err) {
     return {
       ok: false,
@@ -165,8 +152,7 @@ export async function sendSmsCode(
     ok: true,
     cooldownSec: Math.floor(COOLDOWN_MS / 1000),
     expiresInSec: Math.floor(CODE_TTL_MS / 1000),
-    provider,
-    ...(exposeDevCode() && provider === 'dev' ? { devCode: code } : {}),
+    provider: 'aliyun',
   };
 }
 

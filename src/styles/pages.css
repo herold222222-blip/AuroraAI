@@ -1870,13 +1870,18 @@
   color: var(--ink);
 }
 .img-controls {
+  /* Fixed height so switching tabs does not resize the canvas. */
+  --img-controls-h: clamp(168px, 30vh, 280px);
   flex-shrink: 0;
-  max-height: min(280px, 36vh);
+  height: var(--img-controls-h);
+  max-height: var(--img-controls-h);
+  overflow-x: hidden;
   overflow-y: auto;
   border-top: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.88);
   backdrop-filter: blur(10px);
   padding: 0 14px 12px;
+  box-sizing: border-box;
 }
 .img-editor-top {
   display: flex;
@@ -1951,24 +1956,19 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.img-stage-stack {
+.img-regen-slot {
+  flex-shrink: 0;
+  min-height: 34px;
   display: flex;
-  flex-direction: column;
   align-items: center;
-  max-width: 100%;
-  max-height: 100%;
-  min-width: 0;
-  min-height: 0;
-}
-.img-stage-stack .img-stage-frame {
-  flex: 1 1 auto;
-  min-height: 0;
+  justify-content: center;
 }
 .img-regen-under {
   flex-shrink: 0;
   display: flex;
   justify-content: center;
-  padding-top: 8px;
+  align-items: center;
+  min-height: 26px;
 }
 .img-regen-btn {
   height: 26px;
@@ -2024,6 +2024,7 @@
 .img-stage {
   width: 100%;
   height: 100%;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2054,27 +2055,51 @@
   border-color: var(--holo);
   color: var(--holo-deep);
 }
-.img-stage-frame {
+.img-stage-stack {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   max-width: 100%;
   max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+.img-stage-frame {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  max-width: min(100%, 920px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(255, 255, 255, 0.65);
   backdrop-filter: blur(10px);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 10px;
+  box-sizing: border-box;
   will-change: transform;
 }
 .img-stage-media {
   position: relative;
-  display: inline-block;
-  max-width: min(100%, 920px);
-  max-height: calc(100vh - 360px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 .img-main {
   display: block;
   max-width: 100%;
-  max-height: calc(100vh - 380px);
+  max-height: 100%;
+  width: auto;
+  height: auto;
   object-fit: contain;
   border-radius: 8px;
   user-select: none;
@@ -2224,6 +2249,13 @@
   border: 1px solid var(--line);
   border-radius: 14px;
   box-shadow: var(--shadow);
+}
+.img-retouch-toolbar.is-placeholder {
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: none;
+  border-color: transparent;
+  background: transparent;
 }
 .img-tool-btn {
   width: 40px;
@@ -2992,17 +3024,24 @@
   gap: 8px;
 }
 .img-stage-media.is-cropping {
-  max-width: min(100%, 920px);
+  max-width: 100%;
+  max-height: 100%;
 }
 .img-react-crop {
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   max-width: 100%;
-  max-height: calc(100vh - 360px);
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 .img-react-crop .ReactCrop__child-wrapper,
 .img-react-crop .img-crop-target {
   max-width: 100%;
-  max-height: calc(100vh - 380px);
+  max-height: 100%;
+  width: auto;
+  height: auto;
   object-fit: contain;
 }
 .img-crop-wrap {
@@ -3023,6 +3062,9 @@
   background: var(--white);
   flex-shrink: 0;
   align-items: center;
+  /* Prefer single-row height so canvas area stays stable across tabs. */
+  min-height: 52px;
+  box-sizing: border-box;
 }
 .img-footer-bar .img-to-3d-btn {
   margin-left: auto;
@@ -3618,6 +3660,11 @@
     gap: 6px;
     flex-shrink: 0;
     z-index: 2;
+    /* Reserve a constant strip so retouch tools appearing does not resize canvas */
+    height: 46px;
+    min-height: 46px;
+    max-height: 46px;
+    box-sizing: border-box;
   }
   .img-retouch-toolbar {
     position: static;
@@ -3631,6 +3678,8 @@
     gap: 4px;
     padding: 5px 6px;
     border-radius: 12px;
+    height: 100%;
+    box-sizing: border-box;
   }
   .img-tool-btn {
     width: 34px;
@@ -3685,7 +3734,9 @@
   }
 
   .img-controls {
-    max-height: min(168px, 24vh);
+    --img-controls-h: 168px;
+    height: var(--img-controls-h);
+    max-height: var(--img-controls-h);
     padding: 0 8px 8px;
   }
   .img-tabs {
@@ -3720,12 +3771,19 @@
     padding: 0 12px;
   }
   .img-footer-bar {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    height: 44px;
+    min-height: 44px;
+    max-height: 44px;
     padding: 6px 8px;
     gap: 6px;
+    -webkit-overflow-scrolling: touch;
   }
   .img-footer-bar .btn.sm {
     padding: 4px 8px;
     font-size: 12px;
+    flex-shrink: 0;
   }
 
   .img-album-backdrop {
