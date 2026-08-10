@@ -14,6 +14,8 @@ import {
   handleGetDocs,
   handleListApis,
   handleListDonations,
+  handleAdminStats,
+  handleAdjustExtraCredits,
   handleListUsers,
   handleLogin,
   handleMe,
@@ -108,6 +110,10 @@ export function createApiApp() {
     const r = await handleListUsers(reqHeaders(req));
     res.status(r.status).json(r.body);
   });
+  app.get('/api/auth/stats', async (req, res) => {
+    const r = await handleAdminStats(reqHeaders(req));
+    res.status(r.status).json(r.body);
+  });
   app.post('/api/auth/register', async (req, res) => {
     const r = await handleRegister(req.body || {}, reqHeaders(req));
     res.status(r.status).json(r.body);
@@ -126,6 +132,14 @@ export function createApiApp() {
   });
   app.patch('/api/auth/users/:id', async (req, res) => {
     const r = await handleUpdateUser(
+      req.params.id,
+      req.body || {},
+      reqHeaders(req),
+    );
+    res.status(r.status).json(r.body);
+  });
+  app.post('/api/auth/users/:id/credits', async (req, res) => {
+    const r = await handleAdjustExtraCredits(
       req.params.id,
       req.body || {},
       reqHeaders(req),

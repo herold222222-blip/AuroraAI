@@ -1,8 +1,8 @@
 import { type ReactNode } from 'react';
 import { useAppStore } from '../../store/useAppStore';
+import { useAuthStore } from '../../store/useAuthStore';
 
 type NavId =
-  | 'project'
   | 'assets'
   | 'thinktank'
   | 'model'
@@ -11,19 +11,16 @@ type NavId =
   | 'text'
   | 'anim';
 
+/** Modules unavailable to normal users (admin-only / coming soon). */
+const NORMAL_USER_LOCKED: ReadonlySet<NavId> = new Set([
+  'thinktank',
+  'model',
+  'cad',
+  'text',
+  'anim',
+]);
+
 const TOP_NAV: { id: NavId; label: string; icon: ReactNode }[] = [
-  {
-    id: 'project',
-    label: '项目',
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
-        <rect x="3" y="3" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.7" />
-        <rect x="13" y="3" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.7" />
-        <rect x="3" y="13" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.7" />
-        <rect x="13" y="13" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.7" />
-      </svg>
-    ),
-  },
   {
     id: 'assets',
     label: '资产',
@@ -142,11 +139,16 @@ export function AppSidebar() {
   const goto = useAppStore((s) => s.goto);
   const enterImageModule = useAppStore((s) => s.enterImageModule);
   const enterModelModule = useAppStore((s) => s.enterModelModule);
+  const isAdmin = useAuthStore((s) => s.isAdmin);
+  const admin = isAdmin();
 
   const active: NavId =
     view === 'image' ? 'image' : view === 'assets' ? 'assets' : 'model';
 
+  const isLocked = (id: NavId) => !admin && NORMAL_USER_LOCKED.has(id);
+
   const onNav = (id: NavId) => {
+    if (isLocked(id)) return;
     if (id === 'model') {
       enterModelModule();
       return;
@@ -160,7 +162,6 @@ export function AppSidebar() {
       return;
     }
     const labels: Record<NavId, string> = {
-      project: '项目',
       assets: '资产',
       thinktank: '智库',
       model: '模型',
@@ -172,37 +173,29 @@ export function AppSidebar() {
     pushToast(`「${labels[id]}」功能即将上线`, 'info');
   };
 
+  const renderBtn = (item: { id: NavId; label: string; icon: ReactNode }) => {
+    const locked = isLocked(item.id);
+    return (
+      <button
+        key={item.id}
+        type="button"
+        className={`app-sidebar-btn${active === item.id && !locked ? ' active' : ''}${
+          locked ? ' is-locked' : ''
+        }`}
+        onClick={() => onNav(item.id)}
+        title={locked ? `${item.label}（暂无权限）` : item.label}
+        aria-disabled={locked || undefined}
+      >
+        <span className="app-sidebar-icon">{item.icon}</span>
+        <span className="app-sidebar-label">{item.label}</span>
+      </button>
+    );
+  };
+
   return (
     <aside className="app-sidebar" aria-label="主导航" data-auth-free>
-      <div className="app-sidebar-top">
-        {TOP_NAV.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`app-sidebar-btn${active === item.id ? ' active' : ''}`}
-            onClick={() => onNav(item.id)}
-            title={item.label}
-          >
-            <span className="app-sidebar-icon">{item.icon}</span>
-            <span className="app-sidebar-label">{item.label}</span>
-          </button>
-        ))}
-      </div>
-
-      <div className="app-sidebar-bottom">
-        {BOTTOM_NAV.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`app-sidebar-btn${active === item.id ? ' active' : ''}`}
-            onClick={() => onNav(item.id)}
-            title={item.label}
-          >
-            <span className="app-sidebar-icon">{item.icon}</span>
-            <span className="app-sidebar-label">{item.label}</span>
-          </button>
-        ))}
-      </div>
+      <div className="app-sidebar-top">{TOP_NAV.map(renderBtn)}</div>
+      <div className="app-sidebar-bottom">{BOTTOM_NAV.map(renderBtn)}</div>
     </aside>
   );
 }

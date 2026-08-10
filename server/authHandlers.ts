@@ -15,12 +15,14 @@ import {
 import { loadDocs, saveDocs } from './docStore';
 import {
   addSponsorship,
+  adjustExtraCredits,
   assertUsageAvailable,
   consumeUsage,
   createUser,
   deleteDonationById,
   deleteUserById,
   findById,
+  findByPhone,
   findByUsername,
   listDonationMessages,
   listUsers,
@@ -73,11 +75,20 @@ export async function handleSendSms(
   if (purpose !== 'register' && purpose !== 'change_phone') {
     return fail('无效的短信用途');
   }
+  const phone = (body.phone || '').trim();
   if (purpose === 'change_phone') {
     const payload = authFromHeader(headers);
     if (!payload) return fail('未登录或登录已过期', 401);
+    const taken = await findByPhone(phone);
+    if (taken && taken.id !== payload.sub) {
+      return fail('该手机号码已经注册');
+    }
+  } else if (purpose === 'register') {
+    if (await findByPhone(phone)) {
+      return fail('该手机号码已经注册');
+    }
   }
-  const result = await sendSmsCode(body.phone || '', purpose);
+  const result = await sendSmsCode(phone, purpose);
   if (!result.ok) {
     return fail(result.error, result.cooldownSec ? 429 : 400);
   }
@@ -101,12 +112,20 @@ export async function handleRegister(
 ): Promise<AuthResult> {
   try {
     await ensureSeedAdmin();
+    const username = (body.username || '').trim();
     const phone = (body.phone || '').trim();
+    // Reject duplicates before consuming the SMS code.
+    if (username && (await findByUsername(username))) {
+      return fail('该用户名重复，请更换其他用户名');
+    }
+    if (phone && (await findByPhone(phone))) {
+      return fail('该手机号码已经注册');
+    }
     const verified = consumeSmsCode(phone, 'register', body.smsCode || '');
     if (!verified.ok) return fail(verified.error);
     const { ip, region } = await resolveIpRegion(headers);
     const user = await createUser({
-      username: body.username || '',
+      username,
       password: body.password || '',
       phone,
       nickname: body.nickname || '',
@@ -139,9 +158,12 @@ export async function handleLogin(
       return fail('账号或密码错误', 401);
     }
     const { ip, region } = await resolveIpRegion(headers);
+    const now = Date.now();
     const updated = await updateUser(user.id, {
       lastIp: ip || user.lastIp,
       lastRegion: region || user.lastRegion,
+      lastLoginAt: now,
+      lastActiveAt: now,
     });
     const token = signToken({
       sub: updated.id,
@@ -161,7 +183,25 @@ export async function handleMe(
   if (!payload) return fail('未登录或登录已过期', 401);
   const user = await findById(payload.sub);
   if (!user) return fail('用户不存在', 401);
-  return ok({ user: toPublicUser(user) });
+  // Touch activity for DAU/MAU without rewriting every field heavily.
+  const touched = await updateUser(user.id, { lastActiveAt: Date.now() });
+  return ok({ user: toPublicUser(touched) });
+}
+
+export async function handleAdminStats(
+  headers: Record<string, string | string[] | undefined>,
+): Promise<AuthResult> {
+  const payload = authFromHeader(headers);
+  if (!payload || payload.role !== 'admin') {
+    return fail('需要超级管理员权限', 403);
+  }
+  try {
+    const { buildAdminStats } = await import('./adminStats');
+    const stats = await buildAdminStats();
+    return ok({ stats });
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err), 500);
+  }
 }
 
 export async function handleListUsers(
@@ -296,6 +336,40 @@ export async function handleUpdateUser(
       patch.passwordHash = await bcrypt.hash(body.password, 10);
     }
     const user = await updateUser(id, patch);
+    return ok({ user: toPublicUser(user) });
+  } catch (err) {
+    return fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
+export async function handleAdjustExtraCredits(
+  id: string,
+  body: {
+    kind?: 'geminiEdit' | 'qwenEdit' | 'modelGen';
+    delta?: number;
+    note?: string;
+  },
+  headers: Record<string, string | string[] | undefined>,
+): Promise<AuthResult> {
+  const payload = authFromHeader(headers);
+  if (!payload || payload.role !== 'admin') {
+    return fail('需要超级管理员权限', 403);
+  }
+  const kind = body.kind;
+  if (kind !== 'geminiEdit' && kind !== 'qwenEdit' && kind !== 'modelGen') {
+    return fail('kind 需为 geminiEdit、qwenEdit 或 modelGen');
+  }
+  const delta = Number(body.delta);
+  if (!Number.isFinite(delta) || !Number.isInteger(delta) || delta === 0) {
+    return fail('delta 需为非零整数（正数增加、负数减少）');
+  }
+  try {
+    const admin = await findById(payload.sub);
+    const user = await adjustExtraCredits(id, kind, delta, {
+      note: typeof body.note === 'string' ? body.note : undefined,
+      byAdminName:
+        admin?.nickname || admin?.username || payload.username || 'admin',
+    });
     return ok({ user: toPublicUser(user) });
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err));

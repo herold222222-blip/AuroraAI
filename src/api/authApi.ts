@@ -8,6 +8,43 @@ export interface SponsorshipRecord {
   createdAt: number;
 }
 
+export type UsageKind = 'geminiEdit' | 'qwenEdit' | 'modelGen';
+
+export interface ExtraCredits {
+  geminiEdit: number;
+  qwenEdit: number;
+  modelGen: number;
+}
+
+export type UsageLedgerAction = 'consume_free' | 'consume_extra' | 'adjust';
+
+export interface UsageLedgerEntry {
+  id: string;
+  createdAt: number;
+  kind: UsageKind;
+  action: UsageLedgerAction;
+  delta: number;
+  extraAfter: number;
+  note?: string;
+  byAdminName?: string;
+}
+
+export function emptyExtraCredits(): ExtraCredits {
+  return { geminiEdit: 0, qwenEdit: 0, modelGen: 0 };
+}
+
+export function normalizeExtraCredits(
+  raw: ExtraCredits | null | undefined,
+): ExtraCredits {
+  const base = emptyExtraCredits();
+  if (!raw) return base;
+  for (const k of ['geminiEdit', 'qwenEdit', 'modelGen'] as const) {
+    const n = Number(raw[k]);
+    base[k] = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  }
+  return base;
+}
+
 export interface AuthUser {
   id: string;
   username: string;
@@ -29,6 +66,10 @@ export interface AuthUser {
   geminiEditUnlimited: boolean;
   qwenEditUnlimited: boolean;
   modelGenUnlimited: boolean;
+  /** Admin-granted bonus credits (after daily free). */
+  extraCredits: ExtraCredits;
+  /** Free/extra consumption + admin adjustments. */
+  usageLedger: UsageLedgerEntry[];
   /** 普通用户 AI 出图是否带水印；管理员恒为 false */
   watermarkEnabled: boolean;
   sponsorshipTotal: number;
@@ -148,20 +189,23 @@ export function isQuotaExceededMessage(msg: string | undefined | null): boolean 
   );
 }
 
-/** Whether a regular user's daily edit quota for a model family is exhausted. */
+/** Whether a regular user has no free daily quota and no extra credits left. */
 export function isEditQuotaExhausted(
   user: AuthUser | null | undefined,
   kind: 'gemini' | 'qwen',
 ): boolean {
   if (!user || user.role === 'admin') return false;
+  const extras = normalizeExtraCredits(user.extraCredits);
   if (kind === 'gemini') {
     if (user.geminiEditUnlimited || user.geminiEditDailyLimit == null) {
       return false;
     }
-    return user.geminiEditUsedToday >= user.geminiEditDailyLimit;
+    const freeDone = user.geminiEditUsedToday >= user.geminiEditDailyLimit;
+    return freeDone && extras.geminiEdit <= 0;
   }
   if (user.qwenEditUnlimited || user.qwenEditDailyLimit == null) return false;
-  return user.qwenEditUsedToday >= user.qwenEditDailyLimit;
+  const freeDone = user.qwenEditUsedToday >= user.qwenEditDailyLimit;
+  return freeDone && extras.qwenEdit <= 0;
 }
 
 export async function apiMe(token: string) {
@@ -174,6 +218,32 @@ export async function apiListUsers(token: string) {
     { method: 'GET' },
     token,
   );
+}
+
+export type AdminStatsSeriesPoint = { date: string; value: number };
+
+export interface AdminStats {
+  generatedAt: number;
+  todayKey: string;
+  totalUsers: number;
+  todayRegistrations: number;
+  dau: number;
+  mau: number;
+  sponsorshipTotal: number;
+  sponsorshipCount: number;
+  registrationDaily: AdminStatsSeriesPoint[];
+  registrationMonthly: AdminStatsSeriesPoint[];
+  registrationYearly: AdminStatsSeriesPoint[];
+  activeDaily: AdminStatsSeriesPoint[];
+  activeMonthly: AdminStatsSeriesPoint[];
+  activeYearly: AdminStatsSeriesPoint[];
+  sponsorshipDaily: AdminStatsSeriesPoint[];
+  sponsorshipMonthly: AdminStatsSeriesPoint[];
+  sponsorshipYearly: AdminStatsSeriesPoint[];
+}
+
+export async function apiGetAdminStats(token: string) {
+  return request<{ stats: AdminStats }>('/stats', { method: 'GET' }, token);
 }
 
 export async function apiUpdateUser(
@@ -193,6 +263,18 @@ export async function apiUpdateUser(
   return request<{ user: AuthUser }>(
     `/users/${encodeURIComponent(id)}`,
     { method: 'PATCH', body: JSON.stringify(patch) },
+    token,
+  );
+}
+
+export async function apiAdjustExtraCredits(
+  token: string,
+  id: string,
+  body: { kind: UsageKind; delta: number; note?: string },
+) {
+  return request<{ user: AuthUser }>(
+    `/users/${encodeURIComponent(id)}/credits`,
+    { method: 'POST', body: JSON.stringify(body) },
     token,
   );
 }

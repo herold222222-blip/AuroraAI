@@ -4,7 +4,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { Logo } from '../common/Logo';
 import { Modal } from '../common/Modal';
-import { ProfileModal, UsageModal } from '../common/AccountModals';
+import { ProfileModal, UsageModal, WalletModal } from '../common/AccountModals';
 
 const PIPELINE_NODES = [
   {
@@ -70,6 +70,7 @@ export function HomePage() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(false);
   const [help, setHelp] = useState(false);
   const [helpDocs, setHelpDocs] = useState<SiteDocs | null>(null);
   const [pipelineNode, setPipelineNode] = useState<string | null>('design');
@@ -174,6 +175,19 @@ export function HomePage() {
                     >
                       查看用量
                     </button>
+                    {!isAdmin() && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="topbar-user-item"
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setWalletOpen(true);
+                        }}
+                      >
+                        我的钱包
+                      </button>
+                    )}
                     <button
                       type="button"
                       role="menuitem"
@@ -487,6 +501,7 @@ export function HomePage() {
 
       {profileOpen && <ProfileModal onClose={() => setProfileOpen(false)} />}
       {usageOpen && <UsageModal onClose={() => setUsageOpen(false)} />}
+      {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
 
       {help && (
         <div data-auth-free>

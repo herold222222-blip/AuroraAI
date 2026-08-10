@@ -125,6 +125,7 @@ interface AssetState {
     createdAt?: number;
   }) => Promise<AssetItem | null>;
   removeAssets: (ids: string[]) => Promise<AssetItem[]>;
+  renameAsset: (id: string, label: string) => Promise<boolean>;
   counts: () => { image: number; model: number };
   limits: () => { image: number; model: number };
 }
@@ -228,6 +229,32 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     }
     set({ items: next });
     return removed;
+  },
+
+  renameAsset: async (id, label) => {
+    const nextLabel = label.trim();
+    if (!nextLabel) return false;
+    const item = get().items.find((x) => x.id === id);
+    if (!item || item.label === nextLabel) return false;
+    const updated: AssetItem = { ...item, label: nextLabel };
+    try {
+      await idbPut(updated);
+    } catch (err) {
+      console.error('[assets] rename failed', err);
+      return false;
+    }
+    set({
+      items: get().items.map((x) => (x.id === id ? updated : x)),
+    });
+    // Keep image workbench result labels in sync when ids match.
+    void import('../image/useImageStore').then(({ useImageStore }) => {
+      try {
+        useImageStore.getState().renameSavedImage(id, nextLabel);
+      } catch {
+        /* ignore */
+      }
+    });
+    return true;
   },
 }));
 

@@ -5,6 +5,8 @@ import {
   handleDeleteUser,
   handleDonate,
   handleGetDocs,
+  handleAdminStats,
+  handleAdjustExtraCredits,
   handleListApis,
   handleListDonations,
   handleListUsers,
@@ -119,6 +121,10 @@ export async function handler(event: {
       const r = await handleListUsers(headers);
       return json(r.status, r.body);
     }
+    if (method === 'GET' && path === '/stats') {
+      const r = await handleAdminStats(headers);
+      return json(r.status, r.body);
+    }
     if (method === 'GET' && path === '/donations') {
       const r = await handleListDonations(headers);
       return json(r.status, r.body);
@@ -151,6 +157,16 @@ export async function handler(event: {
     if (method === 'PATCH' && path === '/profile') {
       const body = JSON.parse(readRawBody(event) || '{}');
       const r = await handleUpdateProfile(body, headers);
+      return json(r.status, r.body);
+    }
+    const creditsMatch = path.match(/^\/users\/([^/]+)\/credits$/);
+    if (method === 'POST' && creditsMatch) {
+      const body = JSON.parse(readRawBody(event) || '{}');
+      const r = await handleAdjustExtraCredits(
+        decodeURIComponent(creditsMatch[1]),
+        body,
+        headers,
+      );
       return json(r.status, r.body);
     }
     const patchMatch = path.match(/^\/users\/([^/]+)$/);

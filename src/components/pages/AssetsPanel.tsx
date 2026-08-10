@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   useAssetStore,
   type AssetItem,
@@ -11,16 +11,127 @@ import { useAuthStore } from '../../store/useAuthStore';
 type KindFilter = 'all' | AssetKind;
 type SortMode = 'newest' | 'oldest' | 'project';
 
-function formatTime(ts: number) {
+/** Compact timestamp for card meta (date + HH:mm). */
+function formatTimeCompact(ts: number) {
   try {
-    return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+    const d = new Date(ts);
+    const m = d.getMonth() + 1;
+    const day = d.getDate();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${m}/${day} ${hh}:${mm}`;
   } catch {
     return String(ts);
   }
 }
 
+function AssetNameField({
+  item,
+  onRename,
+}: {
+  item: AssetItem;
+  onRename: (id: string, label: string) => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.label);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editing) setDraft(item.label);
+  }, [item.label, editing]);
+
+  useEffect(() => {
+    if (!editing) return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editing]);
+
+  const commit = async () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (!next || next === item.label) {
+      setDraft(item.label);
+      return;
+    }
+    const ok = await onRename(item.id, next);
+    if (!ok) setDraft(item.label);
+  };
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="assets-name-input"
+        value={draft}
+        aria-label="文件名"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void commit()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            void commit();
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setDraft(item.label);
+            setEditing(false);
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="assets-name"
+      title="点击修改文件名"
+      onClick={(e) => {
+        e.stopPropagation();
+        setEditing(true);
+      }}
+    >
+      {item.label}
+    </button>
+  );
+}
+
 function formatLimit(n: number) {
   return Number.isFinite(n) ? String(n) : '∞';
+}
+
+/** Local calendar day key YYYY-MM-DD */
+function dayKey(ts: number) {
+  const d = new Date(ts);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function formatDayLabel(ts: number) {
+  const d = new Date(ts);
+  const today = new Date();
+  const startToday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate(),
+  ).getTime();
+  const startThat = new Date(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate(),
+  ).getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (startThat === startToday) return `今天 · ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  if (startThat === startToday - dayMs) {
+    return `昨天 · ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
+  }
+  const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 · 周${weekdays[d.getDay()]}`;
 }
 
 export function AssetsPanel() {
@@ -28,10 +139,12 @@ export function AssetsPanel() {
   const loaded = useAssetStore((s) => s.loaded);
   const load = useAssetStore((s) => s.load);
   const removeAssets = useAssetStore((s) => s.removeAssets);
+  const renameAsset = useAssetStore((s) => s.renameAsset);
   const counts = useAssetStore((s) => s.counts);
   const limits = useAssetStore((s) => s.limits);
   const isAdmin = useAuthStore((s) => s.isAdmin);
 
+  const projects = useAppStore((s) => s.projects);
   const enterImageModule = useAppStore((s) => s.enterImageModule);
   const requireModelAccess = useAppStore((s) => s.requireModelAccess);
   const setMeshyModelUrl = useAppStore((s) => s.setMeshyModelUrl);
@@ -48,18 +161,29 @@ export function AssetsPanel() {
   const [sort, setSort] = useState<SortMode>('newest');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmIds, setConfirmIds] = useState<string[] | null>(null);
+  const [preview, setPreview] = useState<AssetItem | null>(null);
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  // Sync with top-menu project list; keep orphan asset project ids if any.
   const projectOptions = useMemo(() => {
     const map = new Map<string, string>();
+    for (const p of projects) {
+      map.set(p.id, p.name?.trim() || '未命名项目');
+    }
     for (const it of items) {
-      if (!map.has(it.projectId)) map.set(it.projectId, it.projectName || '未命名项目');
+      if (!it.projectId || map.has(it.projectId)) continue;
+      map.set(it.projectId, it.projectName?.trim() || '未命名项目');
     }
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1], 'zh-CN'));
-  }, [items]);
+  }, [projects, items]);
+
+  useEffect(() => {
+    if (projectId === 'all') return;
+    if (!projectOptions.some(([id]) => id === projectId)) setProjectId('all');
+  }, [projectId, projectOptions]);
 
   const filtered = useMemo(() => {
     let list = items.slice();
@@ -74,6 +198,24 @@ export function AssetsPanel() {
     });
     return list;
   }, [items, kind, projectId, sort]);
+
+  /** Insert date separators whenever the calendar day changes in list order. */
+  const rows = useMemo(() => {
+    const out: Array<
+      | { type: 'day'; key: string; label: string }
+      | { type: 'item'; item: AssetItem }
+    > = [];
+    let lastDay = '';
+    for (const item of filtered) {
+      const key = dayKey(item.createdAt);
+      if (key !== lastDay) {
+        lastDay = key;
+        out.push({ type: 'day', key, label: formatDayLabel(item.createdAt) });
+      }
+      out.push({ type: 'item', item });
+    }
+    return out;
+  }, [filtered]);
 
   const quota = counts();
   const cap = limits();
@@ -121,18 +263,32 @@ export function AssetsPanel() {
     pushToast(`已删除 ${removed.length} 项资产`, 'success');
   };
 
-  const openAsset = (item: AssetItem) => {
-    if (item.kind === 'image') {
-      enterImageModule();
-      const inSaved = savedImages.some((x) => x.url === item.url || x.id === item.id);
-      if (inSaved) focusSavedResult(item.url);
-      else openFromUrl(item.url, { label: item.label });
-      return;
-    }
+  const editImageAsset = (item: AssetItem) => {
+    if (item.kind !== 'image') return;
+    setPreview(null);
+    enterImageModule();
+    const inSaved = savedImages.some(
+      (x) => x.url === item.url || x.id === item.id,
+    );
+    if (inSaved) focusSavedResult(item.url);
+    else openFromUrl(item.url, { label: item.label });
+  };
+
+  const openModelAsset = (item: AssetItem) => {
+    if (item.kind !== 'model') return;
     if (!requireModelAccess()) return;
     setMeshyModelUrl(item.url);
     goto('workbench3d');
   };
+
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview]);
 
   return (
     <div className="assets-page">
@@ -196,10 +352,22 @@ export function AssetsPanel() {
       {!loaded ? (
         <div className="assets-empty">正在加载资产…</div>
       ) : filtered.length === 0 ? (
-        <div className="assets-empty">暂无资产。生成图片或 Meshy 模型后会自动出现在这里。</div>
+        <div className="assets-empty">
+          {projectId !== 'all'
+            ? '该项目下暂无资产。生成图片或 Meshy 模型后会自动归入当前项目。'
+            : '暂无资产。生成图片或 Meshy 模型后会自动出现在这里。'}
+        </div>
       ) : (
         <ul className="assets-grid">
-          {filtered.map((item) => {
+          {rows.map((row) => {
+            if (row.type === 'day') {
+              return (
+                <li key={`day-${row.key}`} className="assets-day-sep" aria-label={row.label}>
+                  <span>{row.label}</span>
+                </li>
+              );
+            }
+            const item = row.item;
             const checked = selected.has(item.id);
             return (
               <li key={item.id} className={`assets-card${checked ? ' selected' : ''}`}>
@@ -214,8 +382,12 @@ export function AssetsPanel() {
                 <button
                   type="button"
                   className="assets-thumb"
-                  onClick={() => openAsset(item)}
-                  title="打开"
+                  onClick={() =>
+                    item.kind === 'image'
+                      ? setPreview(item)
+                      : openModelAsset(item)
+                  }
+                  title={item.kind === 'image' ? '预览' : '打开模型'}
                 >
                   {item.kind === 'image' ? (
                     <img src={item.url} alt={item.label} loading="lazy" />
@@ -239,24 +411,97 @@ export function AssetsPanel() {
                   )}
                 </button>
                 <div className="assets-meta">
-                  <strong>{item.label}</strong>
-                  <span className="assets-kind">{item.kind === 'image' ? '图片' : '模型'}</span>
-                  <span>{item.projectName || '未命名项目'}</span>
-                  <time dateTime={new Date(item.createdAt).toISOString()}>
-                    {formatTime(item.createdAt)}
-                  </time>
+                  <div className="assets-meta-top">
+                    <AssetNameField item={item} onRename={renameAsset} />
+                    <button
+                      type="button"
+                      className="assets-del"
+                      title="删除"
+                      onClick={() => setConfirmIds([item.id])}
+                    >
+                      删除
+                    </button>
+                  </div>
+                  <div className="assets-meta-sub">
+                    <span className="assets-kind">
+                      {item.kind === 'image' ? '图片' : '模型'}
+                    </span>
+                    <span className="assets-meta-sep" aria-hidden>
+                      ·
+                    </span>
+                    <span className="assets-project" title={item.projectName || '未命名项目'}>
+                      {item.projectName || '未命名项目'}
+                    </span>
+                    <span className="assets-meta-sep" aria-hidden>
+                      ·
+                    </span>
+                    <time dateTime={new Date(item.createdAt).toISOString()}>
+                      {formatTimeCompact(item.createdAt)}
+                    </time>
+                  </div>
+                  {item.kind === 'image' && (
+                    <div className="assets-meta-actions">
+                      <button
+                        type="button"
+                        className="assets-edit-btn"
+                        onClick={() => editImageAsset(item)}
+                      >
+                        去编辑
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  className="assets-del"
-                  onClick={() => setConfirmIds([item.id])}
-                >
-                  删除
-                </button>
               </li>
             );
           })}
         </ul>
+      )}
+
+      {preview && preview.kind === 'image' && (
+        <div
+          className="assets-preview-backdrop"
+          role="presentation"
+          onClick={() => setPreview(null)}
+        >
+          <div
+            className="assets-preview"
+            role="dialog"
+            aria-modal="true"
+            aria-label={preview.label}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="assets-preview-head">
+              <strong title={preview.label}>{preview.label}</strong>
+              <button
+                type="button"
+                className="assets-preview-close"
+                aria-label="关闭预览"
+                onClick={() => setPreview(null)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="assets-preview-body">
+              <img src={preview.url} alt={preview.label} />
+            </div>
+            <div className="assets-preview-actions">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={() => setPreview(null)}
+              >
+                关闭
+              </button>
+              <button
+                type="button"
+                className="btn holo"
+                onClick={() => editImageAsset(preview)}
+              >
+                去编辑
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {confirmIds && (

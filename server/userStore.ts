@@ -9,13 +9,18 @@ import {
   DEFAULT_QWEN_DAILY_LIMIT,
   SUPER_ADMIN_PASSWORD,
   SUPER_ADMIN_USERNAME,
+  hasUsageAvailable,
+  normalizeExtraCredits,
   type SponsorshipRecord,
   type StoredUser,
   type UsageKind,
+  type UsageLedgerEntry,
   type UserLevel,
   type UserRole,
   isUnlimited,
 } from './authTypes';
+
+const LEDGER_MAX = 300;
 import { todayKey } from './usageDay';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -80,6 +85,21 @@ function normalizeUserInner(raw: Partial<StoredUser> & Record<string, unknown>):
       )
     : [];
 
+  const usageLedger = Array.isArray(raw.usageLedger)
+    ? (raw.usageLedger as UsageLedgerEntry[])
+        .filter(
+          (e) =>
+            e &&
+            (e.kind === 'geminiEdit' ||
+              e.kind === 'qwenEdit' ||
+              e.kind === 'modelGen') &&
+            (e.action === 'consume_free' ||
+              e.action === 'consume_extra' ||
+              e.action === 'adjust'),
+        )
+        .slice(0, LEDGER_MAX)
+    : [];
+
   const username = String(raw.username || '');
   const nicknameRaw = String(raw.nickname || '').trim();
   const geminiLimitRaw =
@@ -103,6 +123,8 @@ function normalizeUserInner(raw: Partial<StoredUser> & Record<string, unknown>):
     note: String(raw.note || ''),
     lastIp: String(raw.lastIp || ''),
     lastRegion: String(raw.lastRegion || ''),
+    lastLoginAt: Number(raw.lastLoginAt) || 0,
+    lastActiveAt: Number(raw.lastActiveAt) || 0,
     geminiEditDailyLimit: parseLimit(
       geminiLimitRaw,
       DEFAULT_GEMINI_DAILY_LIMIT,
@@ -112,6 +134,8 @@ function normalizeUserInner(raw: Partial<StoredUser> & Record<string, unknown>):
     geminiEditUsedToday,
     qwenEditUsedToday,
     modelGenUsedToday,
+    extraCredits: normalizeExtraCredits(raw.extraCredits),
+    usageLedger,
     watermarkEnabled:
       role === 'admin' ? false : raw.watermarkEnabled !== false,
     usageDayKey: usageDayKey !== day ? day : usageDayKey,
@@ -119,6 +143,16 @@ function normalizeUserInner(raw: Partial<StoredUser> & Record<string, unknown>):
     createdAt: Number(raw.createdAt) || Date.now(),
     updatedAt: Number(raw.updatedAt) || Date.now(),
   };
+}
+
+function pushLedger(user: StoredUser, entry: UsageLedgerEntry) {
+  user.usageLedger = [entry, ...(user.usageLedger || [])].slice(0, LEDGER_MAX);
+}
+
+function setExtra(user: StoredUser, kind: UsageKind, value: number) {
+  const next = normalizeExtraCredits(user.extraCredits);
+  next[kind] = Math.max(0, Math.floor(value));
+  user.extraCredits = next;
 }
 
 async function readFileDb(): Promise<DbShape> {
@@ -286,6 +320,16 @@ export async function findByUsername(
   return rolled;
 }
 
+export async function findByPhone(phone: string): Promise<StoredUser | null> {
+  await ensureSeedAdmin();
+  const db = await loadDb();
+  const p = phone.trim();
+  if (!p) return null;
+  const user = db.users.find((u) => (u.phone || '').trim() === p) ?? null;
+  if (!user) return null;
+  return rollUsageDay(user);
+}
+
 export async function findById(id: string): Promise<StoredUser | null> {
   await ensureSeedAdmin();
   const db = await loadDb();
@@ -339,7 +383,10 @@ export async function createUser(input: {
   const nickname = validateNickname(input.nickname || '');
   const phone = validatePhone(input.phone || '');
   if (await findByUsername(username)) {
-    throw new Error('该用户名已被注册');
+    throw new Error('该用户名重复，请更换其他用户名');
+  }
+  if (await findByPhone(phone)) {
+    throw new Error('该手机号码已经注册');
   }
 
   const now = Date.now();
@@ -383,6 +430,8 @@ export type UserPatch = Partial<
     | 'phone'
     | 'lastIp'
     | 'lastRegion'
+    | 'lastLoginAt'
+    | 'lastActiveAt'
     | 'geminiEditDailyLimit'
     | 'qwenEditDailyLimit'
     | 'modelGenDailyLimit'
@@ -403,6 +452,15 @@ export async function updateUser(
   const db = await loadDb();
   const idx = db.users.findIndex((u) => u.id === id);
   if (idx < 0) throw new Error('用户不存在');
+  if (typeof patch.phone === 'string') {
+    const phone = patch.phone.trim();
+    if (phone) {
+      const taken = db.users.find(
+        (u) => u.id !== id && (u.phone || '').trim() === phone,
+      );
+      if (taken) throw new Error('该手机号码已经注册');
+    }
+  }
   const next = rollUsageDay({
     ...db.users[idx],
     ...patch,
@@ -461,10 +519,8 @@ export async function assertUsageAvailable(
 ): Promise<StoredUser> {
   const user = await findById(userId);
   if (!user) throw new Error('用户不存在');
-  if (!isUnlimited(user, kind)) {
-    const limit = limitOf(user, kind)!;
-    const used = usedOf(user, kind);
-    if (used >= limit) throw quotaError(kind, limit);
+  if (!hasUsageAvailable(user, kind)) {
+    throw quotaError(kind, limitOf(user, kind) ?? 0);
   }
   return user;
 }
@@ -480,19 +536,94 @@ export async function consumeUsage(
   if (idx < 0) throw new Error('用户不存在');
 
   let user = rollUsageDay(db.users[idx]);
-  if (!isUnlimited(user, kind)) {
+  user.extraCredits = normalizeExtraCredits(user.extraCredits);
+
+  const now = Date.now();
+  let action: UsageLedgerEntry['action'] = 'consume_free';
+
+  if (isUnlimited(user, kind)) {
+    bumpUsed(user, kind);
+    action = 'consume_free';
+  } else {
     const limit = limitOf(user, kind)!;
     const used = usedOf(user, kind);
-    if (used >= limit) throw quotaError(kind, limit);
+    if (used < limit) {
+      bumpUsed(user, kind);
+      action = 'consume_free';
+    } else if (user.extraCredits[kind] > 0) {
+      setExtra(user, kind, user.extraCredits[kind] - 1);
+      action = 'consume_extra';
+    } else {
+      throw quotaError(kind, limit);
+    }
   }
 
-  bumpUsed(user, kind);
+  if (user.role !== 'admin') {
+    pushLedger(user, {
+      id: uid('ul'),
+      createdAt: now,
+      kind,
+      action,
+      delta: -1,
+      extraAfter: user.extraCredits[kind],
+    });
+  }
+
   if (ip) user.lastIp = ip;
   if (region) user.lastRegion = region;
-  user.updatedAt = Date.now();
-  db.users[idx] = user;
+  user.lastActiveAt = now;
+  user.updatedAt = now;
+  db.users[idx] = normalizeUser(user);
   await saveDb(db);
-  return user;
+  return db.users[idx];
+}
+
+/** Admin: grant (positive) or revoke (negative) extra credits. */
+export async function adjustExtraCredits(
+  userId: string,
+  kind: UsageKind,
+  delta: number,
+  opts?: { note?: string; byAdminName?: string },
+): Promise<StoredUser> {
+  if (!Number.isFinite(delta) || !Number.isInteger(delta) || delta === 0) {
+    throw new Error('调整数量需为非零整数');
+  }
+  if (kind !== 'geminiEdit' && kind !== 'qwenEdit' && kind !== 'modelGen') {
+    throw new Error('无效的次数类型');
+  }
+
+  const db = await loadDb();
+  const idx = db.users.findIndex((u) => u.id === userId);
+  if (idx < 0) throw new Error('用户不存在');
+  const user = rollUsageDay(db.users[idx]);
+  if (user.role === 'admin') {
+    throw new Error('超级管理员无需额外次数');
+  }
+  user.extraCredits = normalizeExtraCredits(user.extraCredits);
+  const before = user.extraCredits[kind];
+  const after = Math.max(0, before + delta);
+  const applied = after - before;
+  if (applied === 0) {
+    throw new Error(
+      delta < 0 ? '额外次数不足，无法再减少' : '调整无效',
+    );
+  }
+  setExtra(user, kind, after);
+  const now = Date.now();
+  pushLedger(user, {
+    id: uid('ul'),
+    createdAt: now,
+    kind,
+    action: 'adjust',
+    delta: applied,
+    extraAfter: after,
+    note: (opts?.note || '').trim().slice(0, 120) || undefined,
+    byAdminName: opts?.byAdminName?.trim().slice(0, 32) || undefined,
+  });
+  user.updatedAt = now;
+  db.users[idx] = normalizeUser(user);
+  await saveDb(db);
+  return db.users[idx];
 }
 
 /** @deprecated alias — prefer consumeUsage */

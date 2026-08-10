@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import {
   apiDefaultAvatars,
   GEMINI_TO_QWEN_HINT,
+  normalizeExtraCredits,
   QUOTA_EXCEEDED_HINT,
+  type UsageKind,
+  type UsageLedgerEntry,
 } from '../../api/authApi';
 import { compressDataUrl } from '../../image/padImage';
 import { useAppStore } from '../../store/useAppStore';
@@ -218,6 +221,48 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+function UsageKindCard({
+  title,
+  unlimited,
+  dailyLimit,
+  usedToday,
+  extra,
+}: {
+  title: string;
+  unlimited: boolean;
+  dailyLimit: number | null | undefined;
+  usedToday: number;
+  extra: number;
+}) {
+  const freeRemain =
+    unlimited || dailyLimit == null
+      ? null
+      : Math.max(0, dailyLimit - usedToday);
+  return (
+    <div className="usage-card">
+      <h4>{title}</h4>
+      <p>
+        每日免费：
+        <strong>{formatLimit(unlimited, dailyLimit)}</strong>
+      </p>
+      <p>
+        今日已用：
+        <strong>{usedToday}</strong>
+        {freeRemain != null && (
+          <span className="usage-remain"> · 免费剩余 {freeRemain}</span>
+        )}
+      </p>
+      {!unlimited && (
+        <p>
+          额外次数：
+          <strong>{extra}</strong>
+          <span className="usage-remain">（免费用尽后消耗）</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function UsageModal({ onClose }: { onClose: () => void }) {
   const user = useAuthStore((s) => s.user);
   const refreshMe = useAuthStore((s) => s.refreshMe);
@@ -228,12 +273,14 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
 
   if (!user) return null;
 
+  const extras = normalizeExtraCredits(user.extraCredits);
+
   return (
     <div data-auth-free>
       <Modal
         title="查看用量"
-        subtitle="今日限额与已消耗次数（每日 0 点重置，东八区）"
-        width={420}
+        subtitle="先消耗每日免费次数，再消耗额外次数（免费额度每日 0 点重置，东八区）"
+        width={440}
         onClose={onClose}
         footer={
           <button type="button" className="btn holo" onClick={onClose}>
@@ -242,80 +289,202 @@ export function UsageModal({ onClose }: { onClose: () => void }) {
         }
       >
         <div className="usage-cards">
-          <div className="usage-card">
-            <h4>Gemini 改图</h4>
-            <p>
-              限额：
-              <strong>
-                {formatLimit(
-                  user.geminiEditUnlimited,
-                  user.geminiEditDailyLimit,
-                )}
-              </strong>
-            </p>
-            <p>
-              已用：
-              <strong>{user.geminiEditUsedToday}</strong>
-              {!user.geminiEditUnlimited &&
-                user.geminiEditDailyLimit != null && (
-                  <span className="usage-remain">
-                    {' '}
-                    · 剩余{' '}
-                    {Math.max(
-                      0,
-                      user.geminiEditDailyLimit - user.geminiEditUsedToday,
-                    )}
-                  </span>
-                )}
-            </p>
-          </div>
-          <div className="usage-card">
-            <h4>千问改图</h4>
-            <p>
-              限额：
-              <strong>
-                {formatLimit(user.qwenEditUnlimited, user.qwenEditDailyLimit)}
-              </strong>
-            </p>
-            <p>
-              已用：
-              <strong>{user.qwenEditUsedToday}</strong>
-              {!user.qwenEditUnlimited && user.qwenEditDailyLimit != null && (
-                <span className="usage-remain">
-                  {' '}
-                  · 剩余{' '}
-                  {Math.max(
-                    0,
-                    user.qwenEditDailyLimit - user.qwenEditUsedToday,
-                  )}
-                </span>
-              )}
-            </p>
-          </div>
-          <div className="usage-card">
-            <h4>图生模型</h4>
-            <p>
-              限额：
-              <strong>
-                {formatLimit(user.modelGenUnlimited, user.modelGenDailyLimit)}
-              </strong>
-            </p>
-            <p>
-              已用：
-              <strong>{user.modelGenUsedToday}</strong>
-              {!user.modelGenUnlimited && user.modelGenDailyLimit != null && (
-                <span className="usage-remain">
-                  {' '}
-                  · 剩余{' '}
-                  {Math.max(
-                    0,
-                    user.modelGenDailyLimit - user.modelGenUsedToday,
-                  )}
-                </span>
-              )}
-            </p>
-          </div>
+          <UsageKindCard
+            title="Gemini 改图"
+            unlimited={user.geminiEditUnlimited}
+            dailyLimit={user.geminiEditDailyLimit}
+            usedToday={user.geminiEditUsedToday}
+            extra={extras.geminiEdit}
+          />
+          <UsageKindCard
+            title="千问改图"
+            unlimited={user.qwenEditUnlimited}
+            dailyLimit={user.qwenEditDailyLimit}
+            usedToday={user.qwenEditUsedToday}
+            extra={extras.qwenEdit}
+          />
+          <UsageKindCard
+            title="图生模型"
+            unlimited={user.modelGenUnlimited}
+            dailyLimit={user.modelGenDailyLimit}
+            usedToday={user.modelGenUsedToday}
+            extra={extras.modelGen}
+          />
         </div>
+      </Modal>
+    </div>
+  );
+}
+
+function formatMoney(n: number) {
+  return n.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatWalletTime(ts: number) {
+  try {
+    return new Date(ts).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return String(ts);
+  }
+}
+
+const USAGE_KIND_LABEL: Record<UsageKind, string> = {
+  geminiEdit: 'Gemini 改图',
+  qwenEdit: '千问改图',
+  modelGen: '图生模型',
+};
+
+function ledgerActionLabel(entry: UsageLedgerEntry): string {
+  if (entry.action === 'consume_free') return '消耗免费次数';
+  if (entry.action === 'consume_extra') return '消耗额外次数';
+  return entry.delta >= 0 ? '管理员增加额外次数' : '管理员减少额外次数';
+}
+
+/** Personal sponsorship + usage ledger for logged-in users. */
+export function WalletModal({ onClose }: { onClose: () => void }) {
+  const user = useAuthStore((s) => s.user);
+  const refreshMe = useAuthStore((s) => s.refreshMe);
+  const [tab, setTab] = useState<'donate' | 'usage'>('donate');
+
+  useEffect(() => {
+    void refreshMe();
+  }, [refreshMe]);
+
+  if (!user) return null;
+
+  const records = [...(user.sponsorships || [])].sort(
+    (a, b) => b.createdAt - a.createdAt,
+  );
+  const total =
+    typeof user.sponsorshipTotal === 'number'
+      ? user.sponsorshipTotal
+      : records.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+  const ledger = [...(user.usageLedger || [])]
+    .filter(
+      (e) =>
+        e.action === 'consume_free' ||
+        e.action === 'consume_extra' ||
+        e.action === 'adjust',
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const extras = normalizeExtraCredits(user.extraCredits);
+
+  return (
+    <div data-auth-free>
+      <Modal
+        title="我的钱包"
+        subtitle="打赏记录与次数消耗明细"
+        width={520}
+        onClose={onClose}
+        footer={
+          <button type="button" className="btn holo" onClick={onClose}>
+            关闭
+          </button>
+        }
+      >
+        <div className="wallet-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'donate'}
+            className={`wallet-tab${tab === 'donate' ? ' is-active' : ''}`}
+            onClick={() => setTab('donate')}
+          >
+            打赏记录
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'usage'}
+            className={`wallet-tab${tab === 'usage' ? ' is-active' : ''}`}
+            onClick={() => setTab('usage')}
+          >
+            次数明细
+          </button>
+        </div>
+
+        {tab === 'donate' ? (
+          <>
+            <div className="wallet-summary">
+              <div className="wallet-summary-main">
+                <span>累计打赏</span>
+                <strong>¥{formatMoney(total)}</strong>
+              </div>
+              <div className="wallet-summary-meta">
+                共 {records.length} 笔记录
+              </div>
+            </div>
+
+            {records.length === 0 ? (
+              <div className="wallet-empty">
+                暂无打赏记录。可通过顶部「赞赏我们」完成支付确认后在此查看。
+              </div>
+            ) : (
+              <ul className="wallet-list">
+                {records.map((r) => (
+                  <li key={r.id} className="wallet-row">
+                    <div className="wallet-row-top">
+                      <strong>¥{formatMoney(Number(r.amount) || 0)}</strong>
+                      <time dateTime={new Date(r.createdAt).toISOString()}>
+                        {formatWalletTime(r.createdAt)}
+                      </time>
+                    </div>
+                    {r.message?.trim() ? (
+                      <p className="wallet-msg">{r.message.trim()}</p>
+                    ) : (
+                      <p className="wallet-msg is-muted">（无留言）</p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="wallet-extra-summary">
+              <span>
+                Gemini 额外 <strong>{extras.geminiEdit}</strong>
+              </span>
+              <span>
+                千问额外 <strong>{extras.qwenEdit}</strong>
+              </span>
+              <span>
+                模型额外 <strong>{extras.modelGen}</strong>
+              </span>
+            </div>
+            {ledger.length === 0 ? (
+              <div className="wallet-empty">暂无次数消耗记录</div>
+            ) : (
+              <ul className="wallet-list">
+                {ledger.map((e) => (
+                  <li key={e.id} className="wallet-row">
+                    <div className="wallet-row-top">
+                      <strong>
+                        {USAGE_KIND_LABEL[e.kind]} · {ledgerActionLabel(e)}
+                        {e.delta !== 0
+                          ? ` (${e.delta > 0 ? '+' : ''}${e.delta})`
+                          : ''}
+                      </strong>
+                      <time dateTime={new Date(e.createdAt).toISOString()}>
+                        {formatWalletTime(e.createdAt)}
+                      </time>
+                    </div>
+                    <p className="wallet-msg is-muted">
+                      额外余额 {e.extraAfter}
+                      {e.byAdminName ? ` · 操作人 ${e.byAdminName}` : ''}
+                      {e.note?.trim() ? ` · ${e.note.trim()}` : ''}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
       </Modal>
     </div>
   );

@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { convertToPixelCrop, cropToImg } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 import { apiPublicApis } from '../../api/authApi';
@@ -29,6 +35,24 @@ import {
 
 const MAX_STYLE_REFS = 50;
 const STYLE_REF_API_BUDGET = 4.2 * 1024 * 1024;
+
+/** Enter submits like the adjacent generate/apply button (skip IME composing). */
+function submitOnEnter(
+  e: ReactKeyboardEvent,
+  action: () => void,
+  opts?: { disabled?: boolean; ctrlOrMeta?: boolean },
+) {
+  if (e.key !== 'Enter') return;
+  if (e.nativeEvent.isComposing) return;
+  if (opts?.disabled) return;
+  if (opts?.ctrlOrMeta) {
+    if (!(e.ctrlKey || e.metaKey)) return;
+  } else if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) {
+    return;
+  }
+  e.preventDefault();
+  action();
+}
 
 const STYLE_TRANSFER_SYSTEM = `CRITICAL FULL-IMAGE STYLE TRANSFER — STRUCTURE LOCK:
 1. Restyle ONLY appearance: materials, colors, textures, lighting mood, and aesthetic language.
@@ -282,6 +306,11 @@ export function ImageBottomControls() {
                       }
                       placeholder={`涂抹区域 ${br.n} 的修改要求…（可粘贴/拖入参考图）`}
                       disabled={busy}
+                      onKeyDown={(e) =>
+                        submitOnEnter(e, () => void applyBrushRegions(), {
+                          disabled: busy,
+                        })
+                      }
                     />
                     <PromptRefPlus disabled={busy} />
                     <button
@@ -318,6 +347,11 @@ export function ImageBottomControls() {
                       onChange={(e) => setHotspotPrompt(hp.id, e.target.value)}
                       placeholder={`标记 ${hp.n} 的修改要求…（可粘贴/拖入参考图）`}
                       disabled={busy}
+                      onKeyDown={(e) =>
+                        submitOnEnter(e, () => void applyHotspots(), {
+                          disabled: busy,
+                        })
+                      }
                     />
                     <PromptRefPlus disabled={busy} />
                     <button
@@ -350,9 +384,11 @@ export function ImageBottomControls() {
                     onChange={(e) => setPrompt(e.target.value)}
                     placeholder={placeholder}
                     disabled={busy}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void run(prompt);
-                    }}
+                    onKeyDown={(e) =>
+                      submitOnEnter(e, () => void run(prompt), {
+                        disabled: busy,
+                      })
+                    }
                   />
                   <PromptRefPlus disabled={busy} />
                   <button
@@ -445,6 +481,18 @@ export function ImageBottomControls() {
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="自定义尺寸/构图调整描述…（可粘贴/拖入参考图）"
                   disabled={busy}
+                  onKeyDown={(e) =>
+                    submitOnEnter(
+                      e,
+                      () =>
+                        void run(
+                          prompt,
+                          'Adjust framing/scale as requested while keeping subject integrity.',
+                          true,
+                        ),
+                      { disabled: busy },
+                    )
+                  }
                 />
                 <PromptRefPlus disabled={busy} />
                 <button
@@ -521,6 +569,13 @@ export function ImageBottomControls() {
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="自定义滤镜描述…（可粘贴/拖入参考图）"
                   disabled={busy}
+                  onKeyDown={(e) =>
+                    submitOnEnter(
+                      e,
+                      () => void run(prompt, undefined, true),
+                      { disabled: busy },
+                    )
+                  }
                 />
                 <PromptRefPlus disabled={busy} />
                 <button
@@ -952,14 +1007,25 @@ function StylePane({
               value={name}
               onChange={(e) => setName(e.target.value)}
               disabled={busy || saving}
+              onKeyDown={(e) =>
+                submitOnEnter(e, () => saveStyle(), {
+                  disabled: busy || saving,
+                })
+              }
             />
             <textarea
               className="img-prompt-input img-style-desc"
-              placeholder="描述词：说明目标风格、材质、色调、氛围等（可选，有参考图时更准）"
+              placeholder="描述词：说明目标风格、材质、色调、氛围等（可选，有参考图时更准；Ctrl/⌘+Enter 保存）"
               value={desc}
               rows={3}
               onChange={(e) => setDesc(e.target.value)}
               disabled={busy || saving}
+              onKeyDown={(e) =>
+                submitOnEnter(e, () => saveStyle(), {
+                  disabled: busy || saving,
+                  ctrlOrMeta: true,
+                })
+              }
             />
             <div className="img-style-upload-row">
               <button

@@ -6,7 +6,7 @@ import { Logo } from './Logo';
 import { Modal } from './Modal';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { DonatePage } from './DonatePage';
-import { ProfileModal, UsageModal } from './AccountModals';
+import { ProfileModal, UsageModal, WalletModal } from './AccountModals';
 
 type Variant = 'upload' | 'workbench';
 
@@ -33,6 +33,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -169,6 +170,19 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
                 >
                   查看用量
                 </button>
+                {!isAdmin() && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="topbar-user-item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setWalletOpen(true);
+                    }}
+                  >
+                    我的钱包
+                  </button>
+                )}
                 <button
                   type="button"
                   role="menuitem"
@@ -206,6 +220,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
 
       {profileOpen && <ProfileModal onClose={() => setProfileOpen(false)} />}
       {usageOpen && <UsageModal onClose={() => setUsageOpen(false)} />}
+      {walletOpen && <WalletModal onClose={() => setWalletOpen(false)} />}
 
       {help && (
         <div data-auth-free>

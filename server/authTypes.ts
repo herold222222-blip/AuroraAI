@@ -9,6 +9,44 @@ export interface SponsorshipRecord {
   createdAt: number;
 }
 
+/** Persistent bonus credits (not reset daily). Default all 0. */
+export interface ExtraCredits {
+  geminiEdit: number;
+  qwenEdit: number;
+  modelGen: number;
+}
+
+export type UsageLedgerAction = 'consume_free' | 'consume_extra' | 'adjust';
+
+/** Free/extra consumption + admin adjustments. */
+export interface UsageLedgerEntry {
+  id: string;
+  createdAt: number;
+  kind: UsageKind;
+  action: UsageLedgerAction;
+  /** -1 for consume; signed delta for adjust */
+  delta: number;
+  /** Extra balance for this kind after the entry */
+  extraAfter: number;
+  note?: string;
+  byAdminName?: string;
+}
+
+export function emptyExtraCredits(): ExtraCredits {
+  return { geminiEdit: 0, qwenEdit: 0, modelGen: 0 };
+}
+
+export function normalizeExtraCredits(raw: unknown): ExtraCredits {
+  const base = emptyExtraCredits();
+  if (!raw || typeof raw !== 'object') return base;
+  const o = raw as Record<string, unknown>;
+  for (const k of ['geminiEdit', 'qwenEdit', 'modelGen'] as const) {
+    const n = Number(o[k]);
+    base[k] = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  }
+  return base;
+}
+
 export interface StoredUser {
   id: string;
   username: string;
@@ -23,6 +61,10 @@ export interface StoredUser {
   lastIp: string;
   /** 省市，如「广东省 深圳市」 */
   lastRegion: string;
+  /** Last successful login timestamp (ms). */
+  lastLoginAt: number;
+  /** Last authenticated activity (login / me / AI usage) timestamp (ms). */
+  lastActiveAt: number;
   /**
    * 每日可用次数；null 表示不限次数。
    * 超级管理员始终按不限处理。
@@ -33,6 +75,10 @@ export interface StoredUser {
   geminiEditUsedToday: number;
   qwenEditUsedToday: number;
   modelGenUsedToday: number;
+  /** Admin-granted bonus credits; consumed after daily free quota. */
+  extraCredits: ExtraCredits;
+  /** Recent free/extra usage + credit adjustments (newest first). */
+  usageLedger: UsageLedgerEntry[];
   /**
    * 普通用户 AI 出图是否带 Aurora 水印；默认 true。
    * 超级管理员始终不打水印（忽略该字段）。
@@ -66,6 +112,8 @@ export interface PublicUser {
   geminiEditUnlimited: boolean;
   qwenEditUnlimited: boolean;
   modelGenUnlimited: boolean;
+  extraCredits: ExtraCredits;
+  usageLedger: UsageLedgerEntry[];
   /** 普通用户是否出水印；管理员恒为 false */
   watermarkEnabled: boolean;
   sponsorshipTotal: number;
@@ -114,11 +162,43 @@ export function isUnlimited(user: StoredUser, kind: UsageKind): boolean {
   return limit == null || limit < 0;
 }
 
+export function extraOf(user: StoredUser, kind: UsageKind): number {
+  const c = user.extraCredits || emptyExtraCredits();
+  return c[kind] || 0;
+}
+
+export function freeRemaining(user: StoredUser, kind: UsageKind): number {
+  if (isUnlimited(user, kind)) return Number.POSITIVE_INFINITY;
+  const limit =
+    kind === 'geminiEdit'
+      ? user.geminiEditDailyLimit!
+      : kind === 'qwenEdit'
+        ? user.qwenEditDailyLimit!
+        : user.modelGenDailyLimit!;
+  const used =
+    kind === 'geminiEdit'
+      ? user.geminiEditUsedToday
+      : kind === 'qwenEdit'
+        ? user.qwenEditUsedToday
+        : user.modelGenUsedToday;
+  return Math.max(0, limit - used);
+}
+
+export function hasUsageAvailable(user: StoredUser, kind: UsageKind): boolean {
+  if (isUnlimited(user, kind)) return true;
+  if (freeRemaining(user, kind) > 0) return true;
+  return extraOf(user, kind) > 0;
+}
+
 export function toPublicUser(u: StoredUser): PublicUser {
   const sponsorshipTotal = (u.sponsorships || []).reduce(
     (sum, s) => sum + (Number(s.amount) || 0),
     0,
   );
+  const extraCredits = normalizeExtraCredits(u.extraCredits);
+  const usageLedger = Array.isArray(u.usageLedger)
+    ? [...u.usageLedger].sort((a, b) => b.createdAt - a.createdAt).slice(0, 200)
+    : [];
   return {
     id: u.id,
     username: u.username,
@@ -140,6 +220,8 @@ export function toPublicUser(u: StoredUser): PublicUser {
     geminiEditUnlimited: isUnlimited(u, 'geminiEdit'),
     qwenEditUnlimited: isUnlimited(u, 'qwenEdit'),
     modelGenUnlimited: isUnlimited(u, 'modelGen'),
+    extraCredits,
+    usageLedger,
     watermarkEnabled:
       u.role === 'admin' ? false : u.watermarkEnabled !== false,
     sponsorshipTotal,

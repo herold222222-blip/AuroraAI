@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  apiAdjustExtraCredits,
   apiDeleteApi,
   apiDeleteDonation,
   apiDeleteUser,
+  apiGetAdminStats,
   apiGetDocs,
   apiListApis,
   apiListDonations,
@@ -10,17 +12,21 @@ import {
   apiSaveDocs,
   apiUpdateApi,
   apiUpdateUser,
+  normalizeExtraCredits,
+  type AdminStats,
   type AuthUser,
   type DonationMessage,
   type ManagedApi,
   type SiteDocs,
   type SponsorshipRecord,
+  type UsageKind,
 } from '../../api/authApi';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 import { Modal } from '../common/Modal';
+import { AdminStatsPanel } from './AdminStatsPanel';
 
-type Tab = 'users' | 'donations' | 'docs' | 'apis';
+type Tab = 'stats' | 'users' | 'donations' | 'docs' | 'apis';
 
 type PendingDelete =
   | { kind: 'user'; id: string; label: string }
@@ -82,13 +88,15 @@ export function AdminPanel() {
   const enterModelModule = useAppStore((s) => s.enterModelModule);
   const pushToast = useAppStore((s) => s.pushToast);
 
-  const [tab, setTab] = useState<Tab>('users');
+  const [tab, setTab] = useState<Tab>('stats');
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [donations, setDonations] = useState<DonationMessage[]>([]);
+  const [stats, setStats] = useState<AdminStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [sponsorUser, setSponsorUser] = useState<AuthUser | null>(null);
+  const [creditsUser, setCreditsUser] = useState<AuthUser | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [docs, setDocs] = useState<SiteDocs | null>(null);
@@ -154,12 +162,26 @@ export function AdminPanel() {
     }
   }, [token, isAdmin, pushToast]);
 
+  const loadStats = useCallback(async () => {
+    if (!token || !isAdmin()) return;
+    setLoading(true);
+    try {
+      const { stats: s } = await apiGetAdminStats(token);
+      setStats(s);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setLoading(false);
+    }
+  }, [token, isAdmin, pushToast]);
+
   useEffect(() => {
-    if (tab === 'users') void loadUsers();
+    if (tab === 'stats') void loadStats();
+    else if (tab === 'users') void loadUsers();
     else if (tab === 'donations') void loadDonations();
     else if (tab === 'docs') void loadDocs();
     else void loadApis();
-  }, [tab, loadUsers, loadDonations, loadDocs, loadApis]);
+  }, [tab, loadStats, loadUsers, loadDonations, loadDocs, loadApis]);
 
   if (!isAdmin()) {
     return (
@@ -251,7 +273,7 @@ export function AdminPanel() {
       <div className="admin-head">
         <div>
           <h2>超级管理员工作台</h2>
-          <p>用户、赞赏、文档与 API 管理</p>
+          <p>数据统计、用户、赞赏、文档与 API 管理</p>
         </div>
         <div className="admin-head-actions">
           <button
@@ -259,13 +281,15 @@ export function AdminPanel() {
             className="btn soft sm"
             onClick={() =>
               void (
-                tab === 'users'
-                  ? loadUsers()
-                  : tab === 'donations'
-                    ? loadDonations()
-                    : tab === 'docs'
-                      ? loadDocs()
-                      : loadApis()
+                tab === 'stats'
+                  ? loadStats()
+                  : tab === 'users'
+                    ? loadUsers()
+                    : tab === 'donations'
+                      ? loadDonations()
+                      : tab === 'docs'
+                        ? loadDocs()
+                        : loadApis()
               )
             }
           >
@@ -282,6 +306,13 @@ export function AdminPanel() {
       </div>
 
       <div className="admin-tabs">
+        <button
+          type="button"
+          className={tab === 'stats' ? 'active' : ''}
+          onClick={() => setTab('stats')}
+        >
+          数据统计
+        </button>
         <button
           type="button"
           className={tab === 'users' ? 'active' : ''}
@@ -314,6 +345,12 @@ export function AdminPanel() {
 
       {loading ? (
         <div className="admin-empty">加载中…</div>
+      ) : tab === 'stats' ? (
+        stats ? (
+          <AdminStatsPanel stats={stats} />
+        ) : (
+          <div className="admin-empty">暂无统计数据</div>
+        )
       ) : tab === 'apis' ? (
         <ApisManager
           apis={apis}
@@ -479,6 +516,7 @@ export function AdminPanel() {
                   图生模型
                   <span>次/天</span>
                 </th>
+                <th className="col-extra">额外次数</th>
                 <th className="col-wm">水印</th>
                 <th className="col-sponsor">累计赞助</th>
                 <th className="col-note">备注</th>
@@ -569,6 +607,23 @@ export function AdminPanel() {
                         }
                         onLimit={(v) => setDraft(u.id, { modelLimit: v })}
                       />
+                    </td>
+                    <td className="col-extra">
+                      {isSuper ? (
+                        <span className="admin-wm-off">—</span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="admin-sponsor-btn"
+                          onClick={() => setCreditsUser(u)}
+                          title="设置额外次数"
+                        >
+                          {(() => {
+                            const e = normalizeExtraCredits(u.extraCredits);
+                            return `${e.geminiEdit}/${e.qwenEdit}/${e.modelGen}`;
+                          })()}
+                        </button>
+                      )}
                     </td>
                     <td className="col-wm">
                       {isSuper ? (
@@ -663,6 +718,21 @@ export function AdminPanel() {
         >
           <SponsorshipList items={sponsorUser.sponsorships || []} />
         </Modal>
+      )}
+
+      {creditsUser && token && (
+        <ExtraCreditsModal
+          user={creditsUser}
+          token={token}
+          onClose={() => setCreditsUser(null)}
+          onUpdated={(next) => {
+            setCreditsUser(next);
+            setUsers((prev) =>
+              prev.map((u) => (u.id === next.id ? next : u)),
+            );
+          }}
+          pushToast={pushToast}
+        />
       )}
 
       {pendingDelete && (
@@ -1161,6 +1231,180 @@ function DocsEditor({
         )}
       </div>
     </div>
+  );
+}
+
+const EXTRA_KIND_OPTIONS: { kind: UsageKind; label: string }[] = [
+  { kind: 'geminiEdit', label: 'Gemini 改图' },
+  { kind: 'qwenEdit', label: '千问改图' },
+  { kind: 'modelGen', label: '图生模型' },
+];
+
+function ExtraCreditsModal({
+  user,
+  token,
+  onClose,
+  onUpdated,
+  pushToast,
+}: {
+  user: AuthUser;
+  token: string;
+  onClose: () => void;
+  onUpdated: (u: AuthUser) => void;
+  pushToast: (msg: string, type?: 'info' | 'error' | 'success') => void;
+}) {
+  const extras = normalizeExtraCredits(user.extraCredits);
+  const [kind, setKind] = useState<UsageKind>('geminiEdit');
+  const [amount, setAmount] = useState('1');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+
+  const history = [...(user.usageLedger || [])]
+    .filter((e) => e.action === 'adjust')
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const apply = async (sign: 1 | -1) => {
+    const n = Math.floor(Number(amount));
+    if (!Number.isFinite(n) || n <= 0) {
+      pushToast('请输入大于 0 的整数', 'error');
+      return;
+    }
+    setBusy(true);
+    try {
+      const { user: next } = await apiAdjustExtraCredits(token, user.id, {
+        kind,
+        delta: sign * n,
+        note: note.trim() || undefined,
+      });
+      onUpdated(next);
+      pushToast(
+        sign > 0
+          ? `已增加 ${n} 次${EXTRA_KIND_OPTIONS.find((k) => k.kind === kind)?.label || ''}`
+          : `已减少 ${n} 次${EXTRA_KIND_OPTIONS.find((k) => k.kind === kind)?.label || ''}`,
+        'success',
+      );
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : String(err), 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={`额外次数 · ${user.nickname || user.username}`}
+      subtitle="默认 0；用户先消耗每日免费次数，再消耗额外次数"
+      width={520}
+      onClose={onClose}
+      footer={
+        <button type="button" className="btn ghost" onClick={onClose}>
+          关闭
+        </button>
+      }
+    >
+      <div className="admin-extra-balances">
+        {EXTRA_KIND_OPTIONS.map((opt) => (
+          <div key={opt.kind} className="admin-extra-balance">
+            <span>{opt.label}</span>
+            <strong>{extras[opt.kind]}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="admin-extra-form">
+        <label>
+          类型
+          <select
+            className="input"
+            value={kind}
+            onChange={(e) => setKind(e.target.value as UsageKind)}
+          >
+            {EXTRA_KIND_OPTIONS.map((opt) => (
+              <option key={opt.kind} value={opt.kind}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          数量
+          <input
+            className="input"
+            inputMode="numeric"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))}
+            placeholder="1"
+          />
+        </label>
+        <label className="admin-extra-note">
+          备注（可选）
+          <input
+            className="input"
+            value={note}
+            maxLength={120}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="如：活动赠送"
+          />
+        </label>
+      </div>
+
+      <div className="admin-extra-actions">
+        <button
+          type="button"
+          className="btn holo sm"
+          disabled={busy}
+          onClick={() => void apply(1)}
+        >
+          增加
+        </button>
+        <button
+          type="button"
+          className="btn ghost sm"
+          disabled={busy}
+          onClick={() => void apply(-1)}
+        >
+          减少
+        </button>
+        <button
+          type="button"
+          className="btn ghost sm"
+          onClick={() => setShowHistory((v) => !v)}
+        >
+          {showHistory ? '隐藏历史' : '查看历史修改记录'}
+        </button>
+      </div>
+
+      {showHistory && (
+        <div className="admin-extra-history">
+          {history.length === 0 ? (
+            <div className="admin-empty">暂无修改记录</div>
+          ) : (
+            <ul className="wallet-list">
+              {history.map((e) => (
+                <li key={e.id} className="wallet-row">
+                  <div className="wallet-row-top">
+                    <strong>
+                      {EXTRA_KIND_OPTIONS.find((k) => k.kind === e.kind)
+                        ?.label || e.kind}{' '}
+                      {e.delta > 0 ? `+${e.delta}` : e.delta} → 余额{' '}
+                      {e.extraAfter}
+                    </strong>
+                    <time dateTime={new Date(e.createdAt).toISOString()}>
+                      {formatTime(e.createdAt)}
+                    </time>
+                  </div>
+                  <p className="wallet-msg is-muted">
+                    {e.byAdminName ? `操作人 ${e.byAdminName}` : '管理员'}
+                    {e.note?.trim() ? ` · ${e.note.trim()}` : ''}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Modal>
   );
 }
 
