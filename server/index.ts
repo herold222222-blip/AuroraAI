@@ -1,7 +1,7 @@
-import dotenv from 'dotenv';
+import { loadServerEnv } from './loadEnv';
 import { createApiApp } from './app';
 
-dotenv.config();
+loadServerEnv();
 
 const port = Number(process.env.PORT || 3000);
 const app = createApiApp();

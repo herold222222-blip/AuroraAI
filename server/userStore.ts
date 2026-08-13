@@ -344,6 +344,43 @@ export async function findById(id: string): Promise<StoredUser | null> {
   return rolled;
 }
 
+/**
+ * 本地测支付时：线上登录用户在本地可能不存在。
+ * 按线上 user.id 建一条记账用占位用户，便于写入 sponsorships。
+ */
+export async function ensurePayBookUser(input: {
+  id: string;
+  username: string;
+  nickname?: string;
+  role?: UserRole;
+  avatar?: string;
+}): Promise<StoredUser> {
+  await ensureSeedAdmin();
+  const existing = await findById(input.id);
+  if (existing) return existing;
+  const db = await loadDb();
+  const now = Date.now();
+  const user = normalizeUser({
+    id: input.id,
+    username: input.username,
+    nickname: (input.nickname || input.username).trim() || input.username,
+    passwordHash: '',
+    role: input.role === 'admin' ? 'admin' : 'user',
+    level: 'normal',
+    avatar: input.avatar || DEFAULT_AVATARS[0],
+    phone: '',
+    note: '本地支付联调占位用户',
+    lastIp: '',
+    lastRegion: '',
+    sponsorships: [],
+    createdAt: now,
+    updatedAt: now,
+  });
+  db.users.push(user);
+  await saveDb(db);
+  return user;
+}
+
 function validatePhone(phone: string): string {
   const p = phone.trim();
   if (!/^1\d{10}$/.test(p)) {
@@ -644,6 +681,12 @@ export async function addSponsorship(
   userId: string,
   amount: number,
   message: string,
+  payment?: {
+    outTradeNo?: string;
+    transactionId?: string;
+    payChannel?: 'wechat';
+    paidAt?: number;
+  },
 ): Promise<StoredUser> {
   if (!Number.isFinite(amount) || amount < 0.01) {
     throw new Error('赞赏金额无效');
@@ -655,11 +698,29 @@ export async function addSponsorship(
   const idx = db.users.findIndex((u) => u.id === userId);
   if (idx < 0) throw new Error('请先登录后再赞赏，以便记录到您的账户');
 
+  const outTradeNo = payment?.outTradeNo?.trim();
+  // 支付回调 / 轮询可能重复到达：按商户订单号防重入
+  if (outTradeNo) {
+    for (const u of db.users) {
+      const hit = (u.sponsorships || []).find((s) => s.outTradeNo === outTradeNo);
+      if (hit) {
+        const owner = db.users.find((x) => x.id === userId);
+        if (!owner) throw new Error('请先登录后再赞赏，以便记录到您的账户');
+        return owner;
+      }
+    }
+  }
+
+  const paidAt = payment?.paidAt || Date.now();
   const record: SponsorshipRecord = {
     id: uid('sp'),
     amount: Math.round(amount * 100) / 100,
     message: (message || '').trim().slice(0, 120),
-    createdAt: Date.now(),
+    createdAt: paidAt,
+    outTradeNo: outTradeNo || undefined,
+    transactionId: payment?.transactionId || undefined,
+    payChannel: payment?.payChannel,
+    paidAt,
   };
   const user = rollUsageDay(db.users[idx]);
   user.sponsorships = [...(user.sponsorships || []), record];
@@ -677,6 +738,10 @@ export async function listDonationMessages(): Promise<
     amount: number;
     message: string;
     createdAt: number;
+    outTradeNo?: string;
+    transactionId?: string;
+    payChannel?: 'wechat';
+    paidAt?: number;
   }>
 > {
   await ensureSeedAdmin();
@@ -688,6 +753,10 @@ export async function listDonationMessages(): Promise<
     amount: number;
     message: string;
     createdAt: number;
+    outTradeNo?: string;
+    transactionId?: string;
+    payChannel?: 'wechat';
+    paidAt?: number;
   }> = [];
   for (const u of users) {
     for (const s of u.sponsorships || []) {
@@ -698,6 +767,10 @@ export async function listDonationMessages(): Promise<
         amount: s.amount,
         message: s.message,
         createdAt: s.createdAt,
+        outTradeNo: s.outTradeNo,
+        transactionId: s.transactionId,
+        payChannel: s.payChannel,
+        paidAt: s.paidAt,
       });
     }
   }

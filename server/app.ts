@@ -1,6 +1,5 @@
 import express from 'express';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { editImage, type EditRequest } from './geminiService';
 import { createImageTo3dTask, fetchMeshyAsset, getImageTo3dTask } from './meshyService';
 import {
@@ -28,9 +27,18 @@ import {
   handleUpdateProfile,
   handleUpdateUser,
 } from './authHandlers';
+import {
+  handleCreateDonateOrder,
+  handleDonateOrderStatus,
+  handleGetPendingDonateOrder,
+  handleListMyDonateRecords,
+  handleUpdateDonateOrderMessage,
+  handleWechatPayNotify,
+} from './payHandlers';
 import { ensureSeedAdmin, QuotaExceededError } from './userStore';
+import { loadServerEnv } from './loadEnv';
 
-dotenv.config();
+loadServerEnv();
 
 function reqHeaders(req: express.Request) {
   const headers = {
@@ -48,10 +56,35 @@ function reqHeaders(req: express.Request) {
   return headers;
 }
 
+type ReqWithRaw = express.Request & { rawBody?: string };
+
 export function createApiApp() {
   const app = express();
   app.use(cors());
-  app.use(express.json({ limit: '40mb' }));
+
+  // 微信支付回调需要原始 body 验签，必须在 json parser 之前挂载
+  app.post(
+    '/api/pay/wechat/notify',
+    express.raw({ type: '*/*', limit: '2mb' }),
+    async (req, res) => {
+      const raw =
+        Buffer.isBuffer(req.body)
+          ? req.body.toString('utf8')
+          : String(req.body || '');
+      const r = await handleWechatPayNotify(raw, reqHeaders(req));
+      if (r.contentType) res.setHeader('Content-Type', r.contentType);
+      res.status(r.status).send(r.rawBody ?? JSON.stringify(r.body));
+    },
+  );
+
+  app.use(
+    express.json({
+      limit: '40mb',
+      verify: (req, _res, buf) => {
+        (req as ReqWithRaw).rawBody = buf.toString('utf8');
+      },
+    }),
+  );
 
   void ensureSeedAdmin().catch((err) =>
     console.error('[auth] seed admin failed', err),
@@ -162,6 +195,34 @@ export function createApiApp() {
     const r = await handleDonate(req.body || {}, reqHeaders(req));
     res.status(r.status).json(r.body);
   });
+
+  app.post('/api/pay/donate/create', async (req, res) => {
+    const r = await handleCreateDonateOrder(req.body || {}, reqHeaders(req));
+    res.status(r.status).json(r.body);
+  });
+  app.get('/api/pay/donate/pending', async (req, res) => {
+    const r = await handleGetPendingDonateOrder(reqHeaders(req));
+    res.status(r.status).json(r.body);
+  });
+  app.get('/api/pay/donate/records', async (req, res) => {
+    const r = await handleListMyDonateRecords(reqHeaders(req));
+    res.status(r.status).json(r.body);
+  });
+  app.get('/api/pay/donate/status/:outTradeNo', async (req, res) => {
+    const r = await handleDonateOrderStatus(
+      req.params.outTradeNo,
+      reqHeaders(req),
+    );
+    res.status(r.status).json(r.body);
+  });
+  app.patch('/api/pay/donate/message', async (req, res) => {
+    const r = await handleUpdateDonateOrderMessage(
+      req.body || {},
+      reqHeaders(req),
+    );
+    res.status(r.status).json(r.body);
+  });
+
   app.get('/api/auth/donations', async (req, res) => {
     const r = await handleListDonations(reqHeaders(req));
     res.status(r.status).json(r.body);

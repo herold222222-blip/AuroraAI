@@ -1,3 +1,5 @@
+import { apiUrl } from '../config/api';
+
 export interface ImageEditPayload {
   imageDataUrl: string;
   prompt: string;
@@ -26,7 +28,7 @@ function editEndpoint(): string {
       return '/.netlify/functions/image-edit';
     }
   }
-  return '/api/image/edit';
+  return apiUrl('/api/image/edit');
 }
 
 export async function requestImageEdit(payload: ImageEditPayload): Promise<{

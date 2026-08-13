@@ -15,6 +15,7 @@ import {
   worldAreaToM2,
   worldToMm,
 } from './measureUtils';
+import { apiUrl } from '../../config/api';
 
 type MeasureHudState =
   | {
@@ -1082,7 +1083,7 @@ export function Viewport3D() {
       meshyModelUrl.startsWith('data:') ||
       meshyModelUrl.startsWith('/')
         ? meshyModelUrl
-        : `/api/meshy/asset?url=${encodeURIComponent(meshyModelUrl)}`;
+        : apiUrl(`/api/meshy/asset?url=${encodeURIComponent(meshyModelUrl)}`);
 
     loader.load(
       src,

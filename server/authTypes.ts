@@ -7,6 +7,12 @@ export interface SponsorshipRecord {
   amount: number;
   message: string;
   createdAt: number;
+  /** 商户订单号 */
+  outTradeNo?: string;
+  /** 微信支付交易号 */
+  transactionId?: string;
+  payChannel?: 'wechat';
+  paidAt?: number;
 }
 
 /** Persistent bonus credits (not reset daily). Default all 0. */

@@ -1,3 +1,5 @@
+import { apiUrl } from '../config/api';
+
 export type UserRole = 'admin' | 'user';
 export type UserLevel = 'normal';
 
@@ -6,6 +8,33 @@ export interface SponsorshipRecord {
   amount: number;
   message: string;
   createdAt: number;
+  outTradeNo?: string;
+  transactionId?: string;
+  payChannel?: 'wechat';
+  paidAt?: number;
+}
+
+export type DonatePayStatus =
+  | 'pending'
+  | 'user_paying'
+  | 'paid'
+  | 'closed'
+  | 'expired';
+
+export interface DonatePayOrder {
+  outTradeNo: string;
+  amount: number;
+  amountFen: number;
+  message: string;
+  status: DonatePayStatus;
+  codeUrl: string;
+  expireAt: number;
+  createdAt: number;
+  paidAt: number | null;
+  transactionId: string | null;
+  pollIntervalMs: number;
+  pollMaxMs: number;
+  channel: 'wechat';
 }
 
 export type UsageKind = 'geminiEdit' | 'qwenEdit' | 'modelGen';
@@ -85,10 +114,14 @@ export interface DonationMessage {
   amount: number;
   message: string;
   createdAt: number;
+  outTradeNo?: string;
+  transactionId?: string;
+  payChannel?: 'wechat';
+  paidAt?: number;
 }
 
 function authBase(): string {
-  return '/api/auth';
+  return apiUrl('/api/auth');
 }
 
 async function request<T>(
@@ -320,6 +353,7 @@ export async function apiTrackUsage(
   );
 }
 
+/** @deprecated 已停用：请使用微信扫码支付 API */
 export async function apiDonate(
   token: string,
   amount: number,
@@ -330,6 +364,105 @@ export async function apiDonate(
     { method: 'POST', body: JSON.stringify({ amount, message }) },
     token,
   );
+}
+
+async function payRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  token?: string | null,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init.headers as Record<string, string> | undefined),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(apiUrl(`/api/pay${path}`), { ...init, headers });
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) {
+    throw new Error(data.error || `请求失败 (${res.status})`);
+  }
+  return data;
+}
+
+/** 创建 / 刷新微信扫码赞赏订单（金额由服务端二次校验） */
+export async function apiCreateDonateOrder(
+  token: string,
+  amount: number,
+  message: string,
+  refresh = true,
+) {
+  return payRequest<{
+    order: DonatePayOrder;
+    reused: boolean;
+    user?: AuthUser | null;
+  }>(
+    '/donate/create',
+    {
+      method: 'POST',
+      body: JSON.stringify({ amount, message, refresh }),
+    },
+    token,
+  );
+}
+
+/** 恢复未过期的待支付订单（页面刷新防多单） */
+export async function apiGetPendingDonateOrder(token: string) {
+  return payRequest<{ order: DonatePayOrder | null }>(
+    '/donate/pending',
+    { method: 'GET' },
+    token,
+  );
+}
+
+export async function apiDonateOrderStatus(
+  token: string,
+  outTradeNo: string,
+) {
+  return payRequest<{
+    order: DonatePayOrder;
+    user?: AuthUser | null;
+  }>(
+    `/donate/status/${encodeURIComponent(outTradeNo)}`,
+    { method: 'GET' },
+    token,
+  );
+}
+
+/** 更新待支付单留言（不重新生成二维码） */
+export async function apiUpdateDonateOrderMessage(
+  token: string,
+  outTradeNo: string,
+  message: string,
+) {
+  return payRequest<{ order: DonatePayOrder }>(
+    '/donate/message',
+    {
+      method: 'PATCH',
+      body: JSON.stringify({ outTradeNo, message }),
+    },
+    token,
+  );
+}
+
+export interface DonatePayRecord {
+  id: string;
+  amount: number;
+  message: string;
+  createdAt: number;
+  paidAt: number;
+  outTradeNo?: string;
+  transactionId?: string;
+  payChannel: 'wechat';
+  status: 'paid';
+}
+
+/** 我的钱包：已支付打赏订单与累计 */
+export async function apiListMyDonateRecords(token: string) {
+  return payRequest<{
+    records: DonatePayRecord[];
+    total: number;
+    count: number;
+  }>('/donate/records', { method: 'GET' }, token);
 }
 
 export async function apiListDonations(token: string) {

@@ -32,11 +32,23 @@ Aurora 是一个依托 AI 图像分割与深度估算能力的景观设计生产
 ## 快速开始
 
 ```bash
-npm install
-npm run dev      # 启动开发服务器 http://localhost:5173
-npm run build    # 生产构建
-npm run preview  # 预览生产构建
+pnpm install
+# 密钥：复制 .env.example → .env.local 并填写（勿提交）
+cp .env.example .env.local
+
+pnpm dev         # 开发：/api 代理到 .env.development 中的 VITE_API_ORIGIN
+pnpm build       # 生产构建：请求拼到 .env.production 的 VITE_API_ORIGIN
+pnpm preview     # 预览生产构建
 ```
+
+域名配置（可提交 Git）：
+
+| 文件 | 作用 |
+|------|------|
+| `.env.development` | 本地开发域名 + `VITE_DEV_PROXY=true`（代理解决跨域） |
+| `.env.production` | 打包后 API 域名 |
+
+若要用本机 Express API，在 `.env.development.local` 设 `VITE_DEV_PROXY=false`，再跑 `pnpm dev:all`。
 
 ## 业务主流程（完整闭环）
 

@@ -469,7 +469,13 @@ export function AdminPanel() {
                     </td>
                     <td>¥{formatMoney(d.amount)}</td>
                     <td className="admin-msg">
-                      {d.message?.trim() ? d.message : '（无留言）'}
+                      <div>{d.message?.trim() ? d.message : '（无留言）'}</div>
+                      {d.outTradeNo ? (
+                        <div className="admin-ip">
+                          微信 · {d.outTradeNo}
+                          {d.transactionId ? ` · ${d.transactionId}` : ''}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="admin-ip">{formatTime(d.createdAt)}</td>
                     <td className="col-action">
@@ -1464,6 +1470,12 @@ function SponsorshipList({ items }: { items: SponsorshipRecord[] }) {
             <strong>¥{formatMoney(s.amount)}</strong>
             <span>{formatTime(s.createdAt)}</span>
           </div>
+          {s.outTradeNo ? (
+            <p className="admin-ip">
+              微信 · {s.outTradeNo}
+              {s.transactionId ? ` · ${s.transactionId}` : ''}
+            </p>
+          ) : null}
           <p>{s.message?.trim() ? s.message : '（无留言）'}</p>
         </div>
       ))}

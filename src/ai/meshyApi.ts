@@ -1,3 +1,5 @@
+import { apiUrl } from '../config/api';
+
 async function toDataUrl(url: string): Promise<string> {
   if (url.startsWith('data:')) return url;
   const res = await fetch(url);
@@ -17,7 +19,7 @@ export async function createMeshyImageTo3d(opts: {
   textureQuality?: '2K' | '4K';
 }) {
   const imageDataUrl = await toDataUrl(opts.imageUrl);
-  const res = await fetch('/api/meshy/image-to-3d', {
+  const res = await fetch(apiUrl('/api/meshy/image-to-3d'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -48,7 +50,9 @@ export async function pollMeshyImageTo3d(
   const timeoutMs = 8 * 60 * 1000;
 
   while (Date.now() - started < timeoutMs) {
-    const res = await fetch(`/api/meshy/image-to-3d/${encodeURIComponent(taskId)}`);
+    const res = await fetch(
+      apiUrl(`/api/meshy/image-to-3d/${encodeURIComponent(taskId)}`),
+    );
     const data = (await res.json().catch(() => ({}))) as Record<string, unknown> & {
       error?: string;
       status?: string;

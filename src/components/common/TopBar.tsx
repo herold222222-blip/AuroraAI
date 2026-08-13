@@ -105,112 +105,114 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
       </div>
 
       <div className="topbar-right" data-auth-free>
-        <button
-          type="button"
-          className="tb-btn tb-btn-donate"
-          onClick={() => setDonate(true)}
-        >
-          赞赏我们
-        </button>
         {username ? (
-          <div className="topbar-user-menu" ref={menuRef}>
+          <>
             <button
               type="button"
-              className={`topbar-user-chip${menuOpen ? ' open' : ''}`}
-              title={user?.role === 'admin' ? '超级管理员' : '已登录'}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((v) => !v)}
+              className="tb-btn tb-btn-donate"
+              onClick={() => setDonate(true)}
             >
-              <img
-                className="topbar-avatar"
-                src={user?.avatar || '/avatars/default-1.svg'}
-                alt=""
-              />
-              <span className="topbar-user">{username}</span>
-              <span className="topbar-user-caret" aria-hidden>
-                ▾
-              </span>
+              赞赏我们
             </button>
-            {menuOpen && (
-              <div className="topbar-user-dropdown" role="menu">
-                {isAdmin() && (
+            <div className="topbar-user-menu" ref={menuRef}>
+              <button
+                type="button"
+                className={`topbar-user-chip${menuOpen ? ' open' : ''}`}
+                title={user?.role === 'admin' ? '超级管理员' : '已登录'}
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen((v) => !v)}
+              >
+                <img
+                  className="topbar-avatar"
+                  src={user?.avatar || '/avatars/default-1.svg'}
+                  alt=""
+                />
+                <span className="topbar-user">{username}</span>
+                <span className="topbar-user-caret" aria-hidden>
+                  ▾
+                </span>
+              </button>
+              {menuOpen && (
+                <div className="topbar-user-dropdown" role="menu">
+                  {isAdmin() && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="topbar-user-item"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        if (!requireAuth()) return;
+                        enterAdminModule();
+                      }}
+                    >
+                      工作台
+                    </button>
+                  )}
                   <button
                     type="button"
                     role="menuitem"
                     className="topbar-user-item"
                     onClick={() => {
                       setMenuOpen(false);
-                      if (!requireAuth()) return;
-                      enterAdminModule();
+                      setProfileOpen(true);
                     }}
                   >
-                    工作台
+                    修改个人信息
                   </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="topbar-user-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setProfileOpen(true);
-                  }}
-                >
-                  修改个人信息
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="topbar-user-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setUsageOpen(true);
-                  }}
-                >
-                  查看用量
-                </button>
-                {!isAdmin() && (
                   <button
                     type="button"
                     role="menuitem"
                     className="topbar-user-item"
                     onClick={() => {
                       setMenuOpen(false);
-                      setWalletOpen(true);
+                      setUsageOpen(true);
                     }}
                   >
-                    我的钱包
+                    查看用量
                   </button>
-                )}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="topbar-user-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    setHelpDocs(null);
-                    setHelp(true);
-                  }}
-                >
-                  帮助
-                </button>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="topbar-user-item danger"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    logout();
-                    goto('home');
-                    pushToast('已退出登录', 'info');
-                  }}
-                >
-                  退出登陆
-                </button>
-              </div>
-            )}
-          </div>
+                  {!isAdmin() && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="topbar-user-item"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setWalletOpen(true);
+                      }}
+                    >
+                      我的钱包
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="topbar-user-item"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setHelpDocs(null);
+                      setHelp(true);
+                    }}
+                  >
+                    帮助
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="topbar-user-item danger"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      logout();
+                      goto('home');
+                      pushToast('已退出登录', 'info');
+                    }}
+                  >
+                    退出登陆
+                  </button>
+                </div>
+              )}
+            </div>
+          </>
         ) : (
           <button type="button" className="tb-btn" onClick={openLogin}>
             登录 / 注册

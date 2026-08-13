@@ -14,7 +14,6 @@ import {
 } from './apiStore';
 import { loadDocs, saveDocs } from './docStore';
 import {
-  addSponsorship,
   adjustExtraCredits,
   assertUsageAvailable,
   consumeUsage,
@@ -397,22 +396,14 @@ export async function handleTrackUsage(
   }
 }
 
+/** 旧接口已停用：赞赏必须走微信扫码支付，禁止前端直接入账 */
 export async function handleDonate(
-  body: { amount?: number; message?: string },
+  _body: { amount?: number; message?: string },
   headers: Record<string, string | string[] | undefined>,
 ): Promise<AuthResult> {
   const payload = authFromHeader(headers);
   if (!payload) return fail('请先登录后再赞赏', 401);
-  try {
-    const user = await addSponsorship(
-      payload.sub,
-      Number(body.amount),
-      body.message || '',
-    );
-    return ok({ user: toPublicUser(user) }, 201);
-  } catch (err) {
-    return fail(err instanceof Error ? err.message : String(err));
-  }
+  return fail('请使用微信扫码支付完成赞赏，金额由服务端校验后入账', 400);
 }
 
 export async function handleListDonations(

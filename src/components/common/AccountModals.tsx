@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   apiDefaultAvatars,
+  apiListMyDonateRecords,
   GEMINI_TO_QWEN_HINT,
   normalizeExtraCredits,
   QUOTA_EXCEEDED_HINT,
+  type DonatePayRecord,
   type UsageKind,
   type UsageLedgerEntry,
 } from '../../api/authApi';
@@ -346,22 +348,91 @@ function ledgerActionLabel(entry: UsageLedgerEntry): string {
 /** Personal sponsorship + usage ledger for logged-in users. */
 export function WalletModal({ onClose }: { onClose: () => void }) {
   const user = useAuthStore((s) => s.user);
+  const token = useAuthStore((s) => s.token);
+  const setUser = useAuthStore((s) => s.setUser);
   const refreshMe = useAuthStore((s) => s.refreshMe);
   const [tab, setTab] = useState<'donate' | 'usage'>('donate');
+  const [donateRecords, setDonateRecords] = useState<DonatePayRecord[]>([]);
+  const [donateTotal, setDonateTotal] = useState(0);
+  const [donateLoading, setDonateLoading] = useState(true);
+  const [donateError, setDonateError] = useState('');
 
   useEffect(() => {
     void refreshMe();
   }, [refreshMe]);
 
+  useEffect(() => {
+    if (!token) {
+      setDonateLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setDonateLoading(true);
+    setDonateError('');
+    void apiListMyDonateRecords(token)
+      .then((res) => {
+        if (cancelled) return;
+        setDonateRecords(res.records || []);
+        setDonateTotal(Number(res.total) || 0);
+        // 同步到本地 user，便于其它入口读到最新累计
+        const latest = useAuthStore.getState().user;
+        if (latest) {
+          setUser({
+            ...latest,
+            sponsorshipTotal: Number(res.total) || 0,
+            sponsorships: (res.records || []).map((r) => ({
+              id: r.id,
+              amount: r.amount,
+              message: r.message,
+              createdAt: r.createdAt,
+              outTradeNo: r.outTradeNo,
+              transactionId: r.transactionId,
+              payChannel: r.payChannel,
+              paidAt: r.paidAt,
+            })),
+          });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setDonateError(err instanceof Error ? err.message : String(err));
+        // 回退：至少展示 user 上已有的 sponsorships
+        const fallback = [...(user?.sponsorships || [])].sort(
+          (a, b) => b.createdAt - a.createdAt,
+        );
+        setDonateRecords(
+          fallback.map((r) => ({
+            id: r.id,
+            amount: r.amount,
+            message: r.message,
+            createdAt: r.createdAt,
+            paidAt: r.paidAt || r.createdAt,
+            outTradeNo: r.outTradeNo,
+            transactionId: r.transactionId,
+            payChannel: 'wechat' as const,
+            status: 'paid' as const,
+          })),
+        );
+        setDonateTotal(
+          typeof user?.sponsorshipTotal === 'number'
+            ? user.sponsorshipTotal
+            : fallback.reduce((s, r) => s + (Number(r.amount) || 0), 0),
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setDonateLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // 仅随 token / 打开钱包拉取；避免 setUser 造成循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   if (!user) return null;
 
-  const records = [...(user.sponsorships || [])].sort(
-    (a, b) => b.createdAt - a.createdAt,
-  );
-  const total =
-    typeof user.sponsorshipTotal === 'number'
-      ? user.sponsorshipTotal
-      : records.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+  const records = donateRecords;
+  const total = donateTotal;
 
   const ledger = [...(user.usageLedger || [])]
     .filter(
@@ -413,16 +484,24 @@ export function WalletModal({ onClose }: { onClose: () => void }) {
             <div className="wallet-summary">
               <div className="wallet-summary-main">
                 <span>累计打赏</span>
-                <strong>¥{formatMoney(total)}</strong>
+                <strong>
+                  {donateLoading ? '…' : `¥${formatMoney(total)}`}
+                </strong>
               </div>
               <div className="wallet-summary-meta">
-                共 {records.length} 笔记录
+                {donateLoading ? '加载中…' : `共 ${records.length} 笔支付订单`}
               </div>
             </div>
 
-            {records.length === 0 ? (
+            {donateError ? (
+              <p className="wallet-msg is-muted">{donateError}</p>
+            ) : null}
+
+            {donateLoading ? (
+              <div className="wallet-empty">正在加载支付订单…</div>
+            ) : records.length === 0 ? (
               <div className="wallet-empty">
-                暂无打赏记录。可通过顶部「赞赏我们」完成支付确认后在此查看。
+                暂无打赏记录。可通过顶部「赞赏我们」微信扫码支付后在此查看。
               </div>
             ) : (
               <ul className="wallet-list">
@@ -430,10 +509,23 @@ export function WalletModal({ onClose }: { onClose: () => void }) {
                   <li key={r.id} className="wallet-row">
                     <div className="wallet-row-top">
                       <strong>¥{formatMoney(Number(r.amount) || 0)}</strong>
-                      <time dateTime={new Date(r.createdAt).toISOString()}>
-                        {formatWalletTime(r.createdAt)}
+                      <time
+                        dateTime={new Date(
+                          r.paidAt || r.createdAt,
+                        ).toISOString()}
+                      >
+                        {formatWalletTime(r.paidAt || r.createdAt)}
                       </time>
                     </div>
+                    <p className="wallet-msg wallet-pay-meta">
+                      微信支付 · 已支付
+                      {r.outTradeNo ? ` · ${r.outTradeNo}` : ''}
+                    </p>
+                    {r.transactionId ? (
+                      <p className="wallet-msg is-muted">
+                        微信单号 {r.transactionId}
+                      </p>
+                    ) : null}
                     {r.message?.trim() ? (
                       <p className="wallet-msg">{r.message.trim()}</p>
                     ) : (

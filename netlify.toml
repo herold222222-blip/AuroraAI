@@ -41,7 +41,22 @@
   status = 200
   force = true
 
+[[redirects]]
+  from = "/api/pay/*"
+  to = "/.netlify/functions/pay/:splat"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/api/pay"
+  to = "/.netlify/functions/pay"
+  status = 200
+  force = true
+
 [functions."auth"]
+  timeout = 26
+
+[functions."pay"]
   timeout = 26
 
 # SPA fallback

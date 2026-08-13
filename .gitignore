@@ -12,9 +12,15 @@ dist
 dist2
 dist-ssr
 *.local
+# 密钥：本地私有，勿提交
 .env
+.env.local
+.env.*.local
+# 模式配置（域名等公开项）可提交
 .env.*
 !.env.example
+!.env.development
+!.env.production
 .netlify
 .data
 

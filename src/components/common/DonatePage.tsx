@@ -1,24 +1,30 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { apiDonate } from '../../api/authApi';
+import {
+  apiCreateDonateOrder,
+  apiDonateOrderStatus,
+  apiGetPendingDonateOrder,
+  apiUpdateDonateOrderMessage,
+  type DonatePayOrder,
+} from '../../api/authApi';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 
 const PRESETS = [9.9, 28, 66, 128, 520] as const;
+const AMOUNT_DEBOUNCE_MS = 450;
+const MESSAGE_DEBOUNCE_MS = 600;
 
 function formatAmount(n: number) {
   if (!Number.isFinite(n) || n <= 0) return '';
   return n % 1 === 0 ? String(n) : n.toFixed(2);
 }
 
-function buildPayPayload(amount: number, message: string) {
-  const msg = message.trim().slice(0, 120);
-  return [
-    'Aurora 赞赏',
-    `金额: ¥${formatAmount(amount)}`,
-    msg ? `留言: ${msg}` : '留言: （无）',
-    `单号: AUR${Date.now().toString(36).toUpperCase()}`,
-  ].join('\n');
+function amountFen(n: number) {
+  return Math.round(n * 100);
+}
+
+function qrImageSrc(codeUrl: string) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${encodeURIComponent(codeUrl)}`;
 }
 
 export function DonatePage({ onClose }: { onClose: () => void }) {
@@ -26,9 +32,44 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
   const token = useAuthStore((s) => s.token);
   const requireAuth = useAuthStore((s) => s.requireAuth);
   const setUser = useAuthStore((s) => s.setUser);
+
   const [amountText, setAmountText] = useState('28');
   const [message, setMessage] = useState('');
-  const [paying, setPaying] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [order, setOrder] = useState<DonatePayOrder | null>(null);
+  const [pollHint, setPollHint] = useState('');
+  const [ready, setReady] = useState(false);
+  const [createError, setCreateError] = useState('');
+
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollDeadlineRef = useRef<number>(0);
+  const orderRef = useRef<DonatePayOrder | null>(null);
+  const messageRef = useRef(message);
+  const createSeqRef = useRef(0);
+
+  const amount = Number.parseFloat(amountText);
+  const valid = Number.isFinite(amount) && amount >= 0.01 && amount <= 99999;
+
+  const qrExpired =
+    !!order &&
+    (order.status === 'expired' ||
+      (order.expireAt > 0 && order.expireAt <= Date.now()));
+
+  const stopPolling = () => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    pollDeadlineRef.current = 0;
+  };
+
+  useEffect(() => {
+    orderRef.current = order;
+  }, [order]);
+
+  useEffect(() => {
+    messageRef.current = message;
+  }, [message]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -38,41 +79,253 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const amount = Number.parseFloat(amountText);
-  const valid = Number.isFinite(amount) && amount >= 0.01 && amount <= 99999;
+  useEffect(() => {
+    const clearAll = () => stopPolling();
+    window.addEventListener('pagehide', clearAll);
+    window.addEventListener('beforeunload', clearAll);
+    return () => {
+      clearAll();
+      window.removeEventListener('pagehide', clearAll);
+      window.removeEventListener('beforeunload', clearAll);
+    };
+  }, []);
 
-  const qrSrc = useMemo(() => {
-    if (!valid) return '';
-    const data = encodeURIComponent(buildPayPayload(amount, message));
-    return `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=8&data=${data}`;
-  }, [valid, amount, message]);
+  const startPolling = (next: DonatePayOrder) => {
+    stopPolling();
+    if (!token) return;
+    if (next.status === 'paid' || next.status === 'closed') return;
+    if (next.expireAt <= Date.now()) {
+      setOrder({ ...next, status: 'expired' });
+      setPollHint('二维码已过期，请切换金额或点击「刷新二维码」');
+      return;
+    }
 
-  const onPay = () => {
+    const interval = next.pollIntervalMs || 2500;
+    const maxMs = next.pollMaxMs || 5 * 60 * 1000;
+    pollDeadlineRef.current = Date.now() + maxMs;
+    setPollHint('请使用微信扫码支付，支付完成后将自动确认');
+
+    pollTimerRef.current = setInterval(() => {
+      void (async () => {
+        const current = orderRef.current;
+        if (!current || !token) {
+          stopPolling();
+          return;
+        }
+        if (Date.now() > pollDeadlineRef.current) {
+          stopPolling();
+          setPollHint('等待支付超时（已停止轮询）。可刷新二维码后继续');
+          return;
+        }
+        if (current.expireAt <= Date.now()) {
+          stopPolling();
+          setOrder((o) => (o ? { ...o, status: 'expired' } : o));
+          setPollHint('二维码已过期，请切换金额或点击「刷新二维码」');
+          return;
+        }
+        try {
+          const { order: latest, user } = await apiDonateOrderStatus(
+            token,
+            current.outTradeNo,
+          );
+          setOrder(latest);
+          if (latest.status === 'user_paying') {
+            setPollHint('已扫码，等待付款确认…');
+          } else if (latest.status === 'pending') {
+            setPollHint('请使用微信扫码支付，支付完成后将自动确认');
+          } else if (latest.status === 'paid') {
+            stopPolling();
+            if (user) setUser(user);
+            pushToast(
+              `感谢赞赏 ¥${formatAmount(latest.amount)}${
+                latest.message.trim() ? '，留言已收到' : ''
+              }`,
+              'success',
+            );
+            onClose();
+          } else if (
+            latest.status === 'closed' ||
+            latest.status === 'expired'
+          ) {
+            stopPolling();
+            setPollHint(
+              latest.status === 'expired'
+                ? '二维码已过期，请切换金额或点击「刷新二维码」'
+                : '订单已关闭，请刷新二维码',
+            );
+          }
+        } catch {
+          // ignore single poll failure
+        }
+      })();
+    }, interval);
+  };
+
+  const ensureOrder = async (opts: {
+    yuan: number;
+    msg: string;
+    forceRefresh: boolean;
+  }) => {
+    if (!token) return;
+    const seq = ++createSeqRef.current;
+    setCreating(true);
+    setCreateError('');
+    stopPolling();
+    try {
+      const { order: next, user } = await apiCreateDonateOrder(
+        token,
+        opts.yuan,
+        opts.msg,
+        opts.forceRefresh,
+      );
+      if (seq !== createSeqRef.current) return;
+      if (user) setUser(user);
+      if (next.status === 'paid') {
+        pushToast(
+          `感谢赞赏 ¥${formatAmount(next.amount)}${
+            next.message.trim() ? '，留言已收到' : ''
+          }`,
+          'success',
+        );
+        onClose();
+        return;
+      }
+      setOrder(next);
+      startPolling(next);
+    } catch (err) {
+      if (seq !== createSeqRef.current) return;
+      const msg = err instanceof Error ? err.message : String(err);
+      setCreateError(msg);
+      pushToast(msg, 'error');
+    } finally {
+      if (seq === createSeqRef.current) setCreating(false);
+    }
+  };
+
+  // 进入页面：有未完成单则恢复，否则按默认金额自动下单出码
+  useEffect(() => {
+    if (!token) {
+      setReady(true);
+      return;
+    }
+    if (!requireAuth()) {
+      setReady(true);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { order: pending } = await apiGetPendingDonateOrder(token);
+        if (cancelled) return;
+        if (pending) {
+          setOrder(pending);
+          setAmountText(formatAmount(pending.amount));
+          setMessage(pending.message || '');
+          startPolling(pending);
+          setPollHint(
+            pending.status === 'user_paying'
+              ? '已扫码，等待付款确认…'
+              : '已恢复未完成订单，请继续扫码支付',
+          );
+        } else {
+          await ensureOrder({
+            yuan: 28,
+            msg: messageRef.current,
+            forceRefresh: false,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          await ensureOrder({
+            yuan: 28,
+            msg: messageRef.current,
+            forceRefresh: false,
+          });
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      createSeqRef.current += 1;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount once
+  }, [token]);
+
+  // 金额变化：防抖后自动换单换码
+  useEffect(() => {
+    if (!ready || !token || !valid) return;
+
+    const t = window.setTimeout(() => {
+      const current = orderRef.current;
+      const sameAmount =
+        current &&
+        amountFen(current.amount) === amountFen(amount) &&
+        current.status !== 'expired' &&
+        current.status !== 'closed' &&
+        current.expireAt > Date.now();
+      if (sameAmount) return;
+      void ensureOrder({
+        yuan: amount,
+        msg: messageRef.current,
+        forceRefresh: true,
+      });
+    }, AMOUNT_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- amount-driven
+  }, [amountText, ready, token, valid]);
+
+  // 留言变化：只更新订单留言，不换二维码
+  useEffect(() => {
+    if (!ready || !token || !orderRef.current) return;
+    const outTradeNo = orderRef.current.outTradeNo;
+    const t = window.setTimeout(() => {
+      const current = orderRef.current;
+      if (!current || current.outTradeNo !== outTradeNo) return;
+      if ((current.message || '') === message) return;
+      void apiUpdateDonateOrderMessage(token, outTradeNo, message)
+        .then(({ order: next }) => {
+          if (orderRef.current?.outTradeNo === next.outTradeNo) {
+            setOrder(next);
+          }
+        })
+        .catch(() => {
+          // ignore
+        });
+    }, MESSAGE_DEBOUNCE_MS);
+    return () => window.clearTimeout(t);
+  }, [message, ready, token]);
+
+  const onRefreshQr = () => {
     if (!valid) {
       pushToast('请输入有效金额（最少 ¥0.01）', 'info');
       return;
     }
     if (!requireAuth() || !token) {
-      pushToast('请先登录后再赞赏，以便记录到您的账户', 'info');
+      pushToast('请先登录后再赞赏', 'info');
       return;
     }
-    setPaying(true);
-    void (async () => {
-      try {
-        const { user } = await apiDonate(token, amount, message);
-        setUser(user);
-        pushToast(
-          `感谢赞赏 ¥${formatAmount(amount)}${message.trim() ? '，留言已收到' : ''}`,
-          'success',
-        );
-        onClose();
-      } catch (err) {
-        pushToast(err instanceof Error ? err.message : String(err), 'error');
-      } finally {
-        setPaying(false);
-      }
-    })();
+    void ensureOrder({
+      yuan: amount,
+      msg: message,
+      forceRefresh: true,
+    });
   };
+
+  const statusLabel = (() => {
+    if (creating) return '正在生成收款码…';
+    if (!order) {
+      return createError ? '生成失败' : '仅支持微信扫码支付';
+    }
+    if (qrExpired || order.status === 'expired') return '二维码已过期';
+    if (order.status === 'user_paying') return '已扫码等待付款';
+    if (order.status === 'pending') return '待扫码支付';
+    if (order.status === 'closed') return '订单已关闭';
+    if (order.status === 'paid') return '支付成功';
+    return '仅支持微信扫码支付';
+  })();
 
   return createPortal(
     <div className="donate-page" data-auth-free role="dialog" aria-modal="true">
@@ -83,26 +336,58 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
         </button>
         <div className="donate-page-titles">
           <h1>赞赏我们</h1>
-          <p>扫码支付 · 支持任意金额 · 可选留言</p>
+          <p>选择金额即出码 · 微信扫码支付 · 可选留言</p>
         </div>
       </header>
 
       <main className="donate-page-main">
         <section className="donate-card donate-qr-card">
-          <div className="donate-qr-frame">
-            {valid && qrSrc ? (
-              <img src={qrSrc} alt="支付二维码" width={220} height={220} />
+          <div
+            className={`donate-qr-frame${
+              qrExpired || order?.status === 'expired' ? ' is-expired' : ''
+            }${creating ? ' is-loading' : ''}`}
+          >
+            {order?.codeUrl && !qrExpired && !creating ? (
+              <img
+                src={qrImageSrc(order.codeUrl)}
+                alt="微信扫码支付二维码"
+                width={220}
+                height={220}
+              />
             ) : (
-              <div className="donate-qr-placeholder">输入金额后生成收款码</div>
+              <div className="donate-qr-placeholder">
+                {creating
+                  ? '正在生成微信收款码…'
+                  : qrExpired || order?.status === 'expired'
+                    ? '二维码已过期，请刷新或切换金额'
+                    : createError
+                      ? createError
+                      : '请选择赞赏金额'}
+              </div>
             )}
+            {(qrExpired || order?.status === 'expired') && order?.codeUrl ? (
+              <div className="donate-qr-expired-mask">已过期</div>
+            ) : null}
           </div>
-          <p className="donate-qr-hint">
-            请使用微信 / 支付宝扫码完成支付
-          </p>
+          <p className="donate-qr-hint">{statusLabel}</p>
+          {order?.status === 'user_paying' ? (
+            <p className="donate-qr-waiting">已扫码，等待付款确认…</p>
+          ) : null}
+          {pollHint ? <p className="donate-poll-hint">{pollHint}</p> : null}
           <div className="donate-amount-display">
             <span>应付</span>
-            <strong>¥{valid ? formatAmount(amount) : '--'}</strong>
+            <strong>
+              ¥
+              {order && !creating
+                ? formatAmount(order.amount)
+                : valid
+                  ? formatAmount(amount)
+                  : '--'}
+            </strong>
           </div>
+          {order?.outTradeNo ? (
+            <p className="donate-order-no">单号 {order.outTradeNo}</p>
+          ) : null}
         </section>
 
         <section className="donate-card donate-form-card">
@@ -161,13 +446,13 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             className="btn donate-pay-btn block"
-            disabled={!valid || paying}
-            onClick={onPay}
+            disabled={!valid || creating}
+            onClick={onRefreshQr}
           >
-            {paying ? '正在确认支付…' : `确认支付 ¥${valid ? formatAmount(amount) : '0'}`}
+            {creating ? '正在生成收款码…' : '刷新二维码'}
           </button>
           <p className="donate-foot-note">
-            扫码完成支付后点击确认，赞赏金额与留言将记录到您的账户。
+            选择或修改金额后会自动生成微信收款码；留言修改不会更换二维码。金额以服务端校验为准，支付成功后自动入账。
           </p>
         </section>
       </main>
