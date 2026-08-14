@@ -1,0 +1,50 @@
+name: Auto Deploy AuroraAI
+on:
+  push:
+    branches: [ main ] # 修改为你实际推送分支
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+      OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+      OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+      OSS_REGION: ${{ secrets.OSS_REGION }}
+      OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+      AUTH_JWT_SECRET: ${{ secrets.AUTH_JWT_SECRET }}
+
+    steps:
+      - name: Setup SSH Agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ env.SSH_PRIVATE_KEY }}
+
+      - name: Deploy to Aliyun ECS
+        run: |
+          ssh -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST << 'EOF'
+            cd $DEPLOY_PATH
+            git pull origin main
+            pnpm install --frozen-lockfile
+            pnpm build
+
+            cat > .env << ENV
+DATABASE_URL=${DATABASE_URL}
+REDIS_URL=${REDIS_URL}
+OSS_BUCKET=${OSS_BUCKET}
+OSS_ACCESS_KEY_ID=${OSS_ACCESS_KEY_ID}
+OSS_ACCESS_KEY_SECRET=${OSS_ACCESS_KEY_SECRET}
+OSS_REGION=${OSS_REGION}
+OSS_ENDPOINT=${OSS_ENDPOINT}
+AUTH_JWT_SECRET=${AUTH_JWT_SECRET}
+ENV
+
+            pm2 restart AuroraAI
+          EOF
