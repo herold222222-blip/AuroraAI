@@ -141,20 +141,22 @@ export function createApiApp() {
   });
 
   // Project workspace persistence
-  const { handleSaveProject, handleGetProject, handleListMyProjects } = await import('./projectHandlers');
   app.post('/api/projects/save', async (req, res) => {
+    const { handleSaveProject } = await import('./projectHandlers');
     return handleSaveProject(req, res);
   });
   app.get('/api/projects/:id', async (req, res) => {
+    const { handleGetProject } = await import('./projectHandlers');
     return handleGetProject(req, res);
   });
   app.get('/api/projects', async (req, res) => {
+    const { handleListMyProjects } = await import('./projectHandlers');
     return handleListMyProjects(req, res);
   });
 
   // Assets manifest (OSS)
-  const { handleListAssets } = await import('./assetHandlers');
   app.get('/api/assets/manifest', async (req, res) => {
+    const { handleListAssets } = await import('./assetHandlers');
     return handleListAssets(req, res);
   });
   app.get('/api/auth/users', async (req, res) => {

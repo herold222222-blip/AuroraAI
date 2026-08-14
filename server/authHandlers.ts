@@ -120,7 +120,7 @@ export async function handleRegister(
     if (phone && (await findByPhone(phone))) {
       return fail('该手机号码已经注册');
     }
-    const verified = consumeSmsCode(phone, 'register', body.smsCode || '');
+    const verified = await consumeSmsCode(phone, 'register', body.smsCode || '');
     if (!verified.ok) return fail(verified.error);
     const { ip, region } = await resolveIpRegion(headers);
     const user = await createUser({
@@ -258,7 +258,7 @@ export async function handleUpdateProfile(
         return fail('手机号需为 11 位有效号码');
       }
       if (p !== (current.phone || '').trim()) {
-        const verified = consumeSmsCode(p, 'change_phone', body.smsCode || '');
+        const verified = await consumeSmsCode(p, 'change_phone', body.smsCode || '');
         if (!verified.ok) return fail(verified.error);
       }
       patch.phone = p;

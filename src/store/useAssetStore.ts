@@ -148,7 +148,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
         const data = await res.json();
         if (!data?.entries || !Array.isArray(data.entries)) return;
         const entries: any[] = data.entries;
-        const mapped = entries.map((e) => ({
+        const mapped: AssetItem[] = entries.map((e) => ({
           id: `asset_${encodeURIComponent(e.key)}`,
           kind: e.key.endsWith('.glb') || e.key.endsWith('.gltf') ? 'model' : 'image',
           url: e.url,

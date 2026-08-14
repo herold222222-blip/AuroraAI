@@ -1,6 +1,17 @@
-import OSS from 'ali-oss';
+import { createRequire } from 'node:module';
+import type OSS from 'ali-oss';
 
+const require = createRequire(import.meta.url);
+
+let OssCtor: typeof OSS | null = null;
 let client: OSS | null = null;
+
+function loadOss(): typeof OSS {
+  if (OssCtor) return OssCtor;
+  const mod = require('ali-oss') as typeof OSS | { default: typeof OSS };
+  OssCtor = typeof mod === 'function' ? mod : mod.default;
+  return OssCtor;
+}
 
 function getClient(): OSS {
   if (client) return client;
@@ -12,7 +23,8 @@ function getClient(): OSS {
   if (!bucket || !accessKeyId || !accessKeySecret) {
     throw new Error('OSS credentials not configured');
   }
-  client = new OSS({
+  const Ctor = loadOss();
+  client = new Ctor({
     region,
     endpoint,
     accessKeyId,
@@ -48,9 +60,16 @@ export async function signedUrl(key: string, expires = 3600) {
 
 export async function listObjects(prefix = '', maxKeys = 1000) {
   const c = getClient();
-  const res = await c.list({ prefix, 'max-keys': maxKeys });
+  const res = await c.list({ prefix, 'max-keys': maxKeys }, {});
   // res.objects is an array of { name, size, etag, type, lastModified }
   return res.objects || [];
 }
 
-export default { getClient, uploadFile, uploadBuffer, headObject, signedUrl };
+export default {
+  getClient,
+  uploadFile,
+  uploadBuffer,
+  headObject,
+  signedUrl,
+  listObjects,
+};

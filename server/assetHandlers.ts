@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import oss from './ossStore';
 
 // Return a simple asset manifest by listing OSS prefix 'assets/'

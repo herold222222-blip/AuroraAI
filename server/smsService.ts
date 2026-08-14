@@ -194,11 +194,11 @@ export async function sendSmsCode(
   };
 }
 
-export function consumeSmsCode(
+export async function consumeSmsCode(
   phoneRaw: string,
   purpose: SmsPurpose,
   codeRaw: string,
-): { ok: true } | { ok: false; error: string } {
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const phone = phoneRaw.trim();
   const code = (codeRaw || '').trim();
   if (!isValidCnPhone(phone)) {

@@ -1,116 +1,94 @@
 import { toPublicUser, type UserRole } from './authTypes';
 import { verifyToken, type AuthTokenPayload } from './authTokens';
-async function fulfillPaidOrder(
-  order: PayOrder,
-  info: {
-    transactionId: string;
-    amountTotal: number;
-    payerOpenid?: string;
-  },
-): Promise<PayOrder> {
-  if (order.status === 'paid') {
-    return order;
-  }
-  // 后端二次校验金额：必须以订单入库金额为准
-  if (info.amountTotal !== order.amountFen) {
-    throw new Error(
-      `支付金额与订单不符（期望 ${order.amountFen} 分，实际 ${info.amountTotal} 分）`,
-    );
-  }
-  const paidAt = Date.now();
-  // If Postgres available, perform atomic transaction: mark order paid and insert sponsorship
-  if (process.env.DATABASE_URL) {
-    const pool = getPool();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      // lock the order row for update to ensure idempotency
-      const sel = await client.query('SELECT * FROM orders WHERE out_trade_no=$1 FOR UPDATE', [order.outTradeNo]);
-      if (sel.rowCount && sel.rows[0].status === 'paid') {
-        // already paid, return current DB row
-        const r = sel.rows[0];
-        await client.query('COMMIT');
-        return {
-          id: r.id,
-          outTradeNo: r.out_trade_no,
-          userId: r.user_id,
-          amountFen: Number(r.amount_fen),
-          amountYuan: Number(r.amount_yuan),
-          message: r.message,
-          status: r.status,
-          codeUrl: r.code_url,
-          expireAt: Number(r.expire_at || 0),
-          createdAt: Number(r.created_at || 0),
-          updatedAt: Number(r.updated_at || 0),
-          transactionId: r.transaction_id || undefined,
-          paidAt: r.paid_at || undefined,
-          payerOpenid: r.payer_openid || undefined,
-        } as PayOrder;
-      }
+import { getPool } from './db';
+import {
+  closeOpenOrdersForUser,
+  createPayOrder,
+  findActivePendingOrder,
+  findOrderByOutTradeNo,
+  listPaidOrdersByUser,
+  markOrderExpiredIfNeeded,
+  newOutTradeNo,
+  updatePayOrder,
+  type PayOrder,
+} from './orderStore';
+import { addSponsorship, ensurePayBookUser, findById } from './userStore';
+import {
+  closeOutTradeNo,
+  createNativeOrder,
+  decryptNotifyResource,
+  getWechatPayConfig,
+  queryByOutTradeNo,
+  verifyWechatNotifySignature,
+} from './wechatPay';
 
-      // Update order to paid
-      const res = await client.query(
-        `UPDATE orders SET status='paid', transaction_id=$1, paid_at=$2, payer_openid=$3, updated_at=$4 WHERE out_trade_no=$5 RETURNING *`,
-        [info.transactionId, paidAt, info.payerOpenid || null, Date.now(), order.outTradeNo],
-      );
+export type PayResult = {
+  status: number;
+  body: Record<string, unknown>;
+  /** 微信支付回调需返回纯文本 */
+  rawBody?: string;
+  contentType?: string;
+};
 
-      // Ensure sponsorship not duplicated: check by out_trade_no
-      const ps = await client.query('SELECT id FROM sponsorships WHERE out_trade_no=$1', [order.outTradeNo]);
-      if (ps.rowCount === 0) {
-        await client.query(
-          `INSERT INTO sponsorships (sponsor_id, target_user_id, amount_cents, message, out_trade_no, transaction_id, pay_channel, paid_at, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [order.userId, order.userId, order.amountFen, order.message || null, order.outTradeNo, info.transactionId, 'wechat', paidAt, paidAt],
-        );
-      }
-
-      await client.query('COMMIT');
-      if (res.rows && res.rows[0]) {
-        const r = res.rows[0];
-        return {
-          id: r.id,
-          outTradeNo: r.out_trade_no,
-          userId: r.user_id,
-          amountFen: Number(r.amount_fen),
-          amountYuan: Number(r.amount_yuan),
-          message: r.message,
-          status: r.status,
-          codeUrl: r.code_url,
-          expireAt: Number(r.expire_at || 0),
-          createdAt: Number(r.created_at || 0),
-          updatedAt: Number(r.updated_at || 0),
-          transactionId: r.transaction_id || undefined,
-          paidAt: r.paid_at || undefined,
-          payerOpenid: r.payer_openid || undefined,
-        } as PayOrder;
-      }
-      return { ...order, status: 'paid', transactionId: info.transactionId, paidAt } as PayOrder;
-    } catch (e) {
-      await client.query('ROLLBACK');
-      console.error('[pay] fulfillPaidOrder tx', e);
-      throw e;
-    } finally {
-      client.release();
-    }
-  }
-
-  // Fallback: file-based operations
-  const updated =
-    (await updatePayOrder(order.outTradeNo, {
-      status: 'paid',
-      transactionId: info.transactionId,
-      paidAt,
-      payerOpenid: info.payerOpenid,
-    })) || order;
-
-  await addSponsorship(order.userId, order.amountYuan, order.message, {
-    outTradeNo: order.outTradeNo,
-    transactionId: info.transactionId,
-    payChannel: 'wechat',
-    paidAt,
-  });
-  return updated;
+function ok(body: Record<string, unknown>, status = 200): PayResult {
+  return { status, body };
 }
+
+function fail(error: string, status = 400): PayResult {
+  return { status, body: { error } };
+}
+
+function bearerFromHeader(
+  headers: Record<string, string | string[] | undefined>,
+): string {
+  const h = headers.authorization ?? headers.Authorization;
+  const token = Array.isArray(h) ? h[0] : h;
+  return token || '';
+}
+
+function authFromHeader(
+  headers: Record<string, string | string[] | undefined>,
+) {
+  return verifyToken(bearerFromHeader(headers));
+}
+
+/** 本地 JWT 校验失败时，用线上 /api/auth/me 认登录态（混合代理联调） */
+async function resolvePayAuth(
+  headers: Record<string, string | string[] | undefined>,
+): Promise<AuthTokenPayload | null> {
+  const local = authFromHeader(headers);
+  if (local) return local;
+
+  const remote = String(
+    process.env.AUTH_API_ORIGIN || process.env.VITE_API_ORIGIN || '',
+  ).replace(/\/$/, '');
+  if (!remote) return null;
+
+  const token = bearerFromHeader(headers);
+  if (!token) return null;
+  const authorization = token.startsWith('Bearer ')
+    ? token
+    : `Bearer ${token}`;
+
+  try {
+    const res = await fetch(`${remote}/api/auth/me`, {
+      headers: { Authorization: authorization },
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      user?: {
+        id?: string;
+        username?: string;
+        nickname?: string;
+        role?: UserRole;
+        avatar?: string;
+      };
+    };
+    const u = data.user;
+    if (!u?.id || !u.username) return null;
+    await ensurePayBookUser({
+      id: u.id,
+      username: u.username,
       nickname: u.nickname,
       role: u.role,
       avatar: u.avatar,
@@ -216,22 +194,42 @@ async function fulfillPaidOrder(
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // idempotent update
-      const already = await client.query('SELECT status FROM orders WHERE out_trade_no=$1 FOR UPDATE', [order.outTradeNo]);
-      if (already.rowCount && already.rows[0].status === 'paid') {
+      // lock the order row for update to ensure idempotency
+      const sel = await client.query('SELECT * FROM orders WHERE out_trade_no=$1 FOR UPDATE', [order.outTradeNo]);
+      if (sel.rowCount && sel.rows[0].status === 'paid') {
+        const r = sel.rows[0];
         await client.query('COMMIT');
-        return order;
+        return {
+          id: r.id,
+          outTradeNo: r.out_trade_no,
+          userId: r.user_id,
+          amountFen: Number(r.amount_fen),
+          amountYuan: Number(r.amount_yuan),
+          message: r.message,
+          status: r.status,
+          codeUrl: r.code_url,
+          expireAt: Number(r.expire_at || 0),
+          createdAt: Number(r.created_at || 0),
+          updatedAt: Number(r.updated_at || 0),
+          transactionId: r.transaction_id || undefined,
+          paidAt: r.paid_at || undefined,
+          payerOpenid: r.payer_openid || undefined,
+        } as PayOrder;
       }
+
       const res = await client.query(
         `UPDATE orders SET status='paid', transaction_id=$1, paid_at=$2, payer_openid=$3, updated_at=$4 WHERE out_trade_no=$5 RETURNING *`,
-        [info.transactionId, info.amountTotal === undefined ? null : paidAt, info.payerOpenid || null, Date.now(), order.outTradeNo],
+        [info.transactionId, paidAt, info.payerOpenid || null, Date.now(), order.outTradeNo],
       );
 
-      await client.query(
-        `INSERT INTO sponsorships (sponsor_id, target_user_id, amount_cents, message, out_trade_no, transaction_id, pay_channel, paid_at, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [order.userId, order.userId, Math.round(order.amountYuan * 100), order.message || null, order.outTradeNo, info.transactionId, 'wechat', paidAt, paidAt],
-      );
+      const ps = await client.query('SELECT id FROM sponsorships WHERE out_trade_no=$1', [order.outTradeNo]);
+      if (ps.rowCount === 0) {
+        await client.query(
+          `INSERT INTO sponsorships (sponsor_id, target_user_id, amount_cents, message, out_trade_no, transaction_id, pay_channel, paid_at, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [order.userId, order.userId, order.amountFen, order.message || null, order.outTradeNo, info.transactionId, 'wechat', paidAt, paidAt],
+        );
+      }
 
       await client.query('COMMIT');
       // return updated order from DB

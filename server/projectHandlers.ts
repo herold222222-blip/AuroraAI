@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import { saveProjectArchive, getProjectManifest, listProjectsByOwner } from './projectStore';
 import { verifyToken } from './authTokens';
 
