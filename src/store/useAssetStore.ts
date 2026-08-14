@@ -135,9 +135,48 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   loaded: false,
 
   load: async () => {
-    const items = await idbGetAll();
-    items.sort((a, b) => b.createdAt - a.createdAt);
-    set({ items, loaded: true });
+    // 1) load cached items from IndexedDB
+    const cached = await idbGetAll();
+    cached.sort((a, b) => b.createdAt - a.createdAt);
+    set({ items: cached, loaded: true });
+
+    // 2) in background, fetch manifest from server and merge
+    void (async () => {
+      try {
+        const res = await fetch('/api/assets/manifest');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data?.entries || !Array.isArray(data.entries)) return;
+        const entries: any[] = data.entries;
+        const mapped = entries.map((e) => ({
+          id: `asset_${encodeURIComponent(e.key)}`,
+          kind: e.key.endsWith('.glb') || e.key.endsWith('.gltf') ? 'model' : 'image',
+          url: e.url,
+          label: e.key.split('/').pop() || e.key,
+          createdAt: e.lastModified ? new Date(e.lastModified).getTime() : Date.now(),
+          projectId: '',
+          projectName: '',
+        }));
+
+        // Merge with existing cached items: prefer cached items (local edits), add new ones
+        const existing = (get().items || []) as any[];
+        const existingKeys = new Set(existing.map((x) => x.url || x.id));
+        const toAdd = mapped.filter((m) => !existingKeys.has(m.url));
+        if (toAdd.length) {
+          for (const a of toAdd) {
+            try {
+              await idbPut(a);
+            } catch (e) {
+              // ignore
+            }
+          }
+          const all = [...toAdd, ...existing].sort((a, b) => b.createdAt - a.createdAt);
+          set({ items: all });
+        }
+      } catch (e) {
+        // ignore network errors
+      }
+    })();
   },
 
   counts: () => {

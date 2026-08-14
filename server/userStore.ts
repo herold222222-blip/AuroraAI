@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcryptjs';
+import { getPool } from './db';
 import {
   DEFAULT_AVATARS,
   DEFAULT_DAILY_LIMIT,
@@ -197,7 +198,98 @@ async function writeBlobDb(db: DbShape): Promise<boolean> {
   }
 }
 
+async function pgLoadDb(): Promise<DbShape | null> {
+  try {
+    const pool = getPool();
+    const res = await pool.query('SELECT * FROM users');
+    const rows = res.rows || [];
+    const users: StoredUser[] = rows.map((r: any) =>
+      normalizeUser({
+        id: r.id,
+        username: r.username,
+        passwordHash: r.password_hash || '',
+        phone: r.phone || '',
+        nickname: r.nickname || r.username,
+        role: r.role || 'user',
+        level: r.level || 'normal',
+        avatar: r.avatar || '',
+        note: r.note || '',
+        lastIp: r.last_ip || '',
+        lastRegion: r.last_region || '',
+        lastLoginAt: Number(r.last_login_at) || 0,
+        lastActiveAt: Number(r.last_active_at) || 0,
+        geminiEditDailyLimit: r.gemini_edit_daily_limit ?? undefined,
+        qwenEditDailyLimit: r.qwen_edit_daily_limit ?? undefined,
+        modelGenDailyLimit: r.model_gen_daily_limit ?? undefined,
+        geminiEditUsedToday: Number(r.gemini_edit_used_today) || 0,
+        qwenEditUsedToday: Number(r.qwen_edit_used_today) || 0,
+        modelGenUsedToday: Number(r.model_gen_used_today) || 0,
+        extraCredits: typeof r.extra_credits === 'string' ? JSON.parse(r.extra_credits) : r.extra_credits || {},
+        usageLedger: typeof r.usage_ledger === 'string' ? JSON.parse(r.usage_ledger) : r.usage_ledger || [],
+        watermarkEnabled: r.watermark_enabled === false ? false : true,
+        usageDayKey: r.usage_day_key || undefined,
+        sponsorships: typeof r.sponsorships === 'string' ? JSON.parse(r.sponsorships) : r.sponsorships || [],
+        createdAt: Number(r.created_at) || Date.now(),
+        updatedAt: Number(r.updated_at) || Date.now(),
+      } as Partial<StoredUser> & Record<string, unknown>),
+    );
+    return { users };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function pgSaveDb(db: DbShape): Promise<boolean> {
+  try {
+    const pool = getPool();
+    for (const u of db.users) {
+      await pool.query(
+        `INSERT INTO users (id, username, password_hash, phone, nickname, role, level, avatar, note, last_ip, last_region, last_login_at, last_active_at, gemini_edit_daily_limit, qwen_edit_daily_limit, model_gen_daily_limit, gemini_edit_used_today, qwen_edit_used_today, model_gen_used_today, extra_credits, usage_ledger, watermark_enabled, usage_day_key, sponsorships, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+         ON CONFLICT (id) DO UPDATE SET username=EXCLUDED.username, password_hash=EXCLUDED.password_hash, phone=EXCLUDED.phone, nickname=EXCLUDED.nickname, role=EXCLUDED.role, level=EXCLUDED.level, avatar=EXCLUDED.avatar, note=EXCLUDED.note, last_ip=EXCLUDED.last_ip, last_region=EXCLUDED.last_region, last_login_at=EXCLUDED.last_login_at, last_active_at=EXCLUDED.last_active_at, gemini_edit_daily_limit=EXCLUDED.gemini_edit_daily_limit, qwen_edit_daily_limit=EXCLUDED.qwen_edit_daily_limit, model_gen_daily_limit=EXCLUDED.model_gen_daily_limit, gemini_edit_used_today=EXCLUDED.gemini_edit_used_today, qwen_edit_used_today=EXCLUDED.qwen_edit_used_today, model_gen_used_today=EXCLUDED.model_gen_used_today, extra_credits=EXCLUDED.extra_credits, usage_ledger=EXCLUDED.usage_ledger, watermark_enabled=EXCLUDED.watermark_enabled, usage_day_key=EXCLUDED.usage_day_key, sponsorships=EXCLUDED.sponsorships, updated_at=EXCLUDED.updated_at`,
+        [
+          u.id,
+          u.username,
+          u.passwordHash || '',
+          u.phone || null,
+          u.nickname || null,
+          u.role || 'user',
+          u.level || 'normal',
+          u.avatar || null,
+          u.note || null,
+          u.lastIp || null,
+          u.lastRegion || null,
+          u.lastLoginAt || null,
+          u.lastActiveAt || null,
+          u.geminiEditDailyLimit ?? null,
+          u.qwenEditDailyLimit ?? null,
+          u.modelGenDailyLimit ?? null,
+          u.geminiEditUsedToday || 0,
+          u.qwenEditUsedToday || 0,
+          u.modelGenUsedToday || 0,
+          JSON.stringify(u.extraCredits || {}),
+          JSON.stringify(u.usageLedger || []),
+          u.watermarkEnabled === false ? false : true,
+          u.usageDayKey || null,
+          JSON.stringify(u.sponsorships || []),
+          u.createdAt || Date.now(),
+          u.updatedAt || Date.now(),
+        ],
+      );
+    }
+    return true;
+  } catch (e) {
+    console.error('pgSaveDb error', e);
+    return false;
+  }
+}
+
 async function loadDb(): Promise<DbShape> {
+  // Prefer Postgres if configured
+  if (process.env.DATABASE_URL) {
+    const pg = await pgLoadDb();
+    if (pg) return pg;
+  }
   if (process.env.NETLIFY === 'true' || process.env.NETLIFY_BLOBS) {
     const blob = await readBlobDb();
     if (blob) return blob;
@@ -206,6 +298,11 @@ async function loadDb(): Promise<DbShape> {
 }
 
 async function saveDb(db: DbShape): Promise<void> {
+  // Prefer Postgres if configured; otherwise try blob then file
+  if (process.env.DATABASE_URL) {
+    const ok = await pgSaveDb(db);
+    if (ok) return;
+  }
   const usedBlob = await writeBlobDb(db);
   if (!usedBlob) await writeFileDb(db);
 }

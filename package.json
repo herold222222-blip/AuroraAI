@@ -26,7 +26,10 @@
     "react-dom": "^19.2.7",
     "react-image-crop": "^11.1.2",
     "three": "^0.185.1",
-    "zustand": "^5.0.14"
+    "zustand": "^5.0.14",
+    "ioredis": "^5.3.2",
+    "pg": "^8.10.0",
+    "ali-oss": "^6.16.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

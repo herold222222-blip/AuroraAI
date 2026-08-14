@@ -2,6 +2,7 @@
  * SMS OTP for register / change-phone via Aliyun Dysmsapi.
  */
 import crypto from 'node:crypto';
+import Redis from 'ioredis';
 
 export type SmsPurpose = 'register' | 'change_phone';
 
@@ -16,6 +17,16 @@ interface CodeEntry {
   expiresAt: number;
   sentAt: number;
   attempts: number;
+}
+
+let redis: Redis | null = null;
+if (process.env.REDIS_URL) {
+  try {
+    redis = new Redis(process.env.REDIS_URL);
+  } catch (e) {
+    // ignore and fallback to memory
+    redis = null;
+  }
 }
 
 const codes = new Map<string, CodeEntry>();
@@ -118,15 +129,32 @@ export async function sendSmsCode(
   }
 
   const k = key(phone, purpose);
-  const existing = codes.get(k);
   const now = Date.now();
-  if (existing && now - existing.sentAt < COOLDOWN_MS) {
-    const left = Math.ceil((COOLDOWN_MS - (now - existing.sentAt)) / 1000);
-    return {
-      ok: false,
-      error: `请 ${left} 秒后再获取验证码`,
-      cooldownSec: left,
-    };
+
+  // Check cooldown (Redis preferred)
+  if (redis) {
+    try {
+      const raw = await redis.get(k);
+      if (raw) {
+        const existing = JSON.parse(raw) as CodeEntry;
+        if (now - existing.sentAt < COOLDOWN_MS) {
+          const left = Math.ceil((COOLDOWN_MS - (now - existing.sentAt)) / 1000);
+          return { ok: false, error: `请 ${left} 秒后再获取验证码`, cooldownSec: left };
+        }
+      }
+    } catch (e) {
+      // ignore and fallback to memory checks
+    }
+  } else {
+    const existing = codes.get(k);
+    if (existing && now - existing.sentAt < COOLDOWN_MS) {
+      const left = Math.ceil((COOLDOWN_MS - (now - existing.sentAt)) / 1000);
+      return {
+        ok: false,
+        error: `请 ${left} 秒后再获取验证码`,
+        cooldownSec: left,
+      };
+    }
   }
 
   const code = String(crypto.randomInt(100000, 1000000));
@@ -147,7 +175,17 @@ export async function sendSmsCode(
     };
   }
 
-  codes.set(k, entry);
+  // Persist entry (Redis preferred)
+  if (redis) {
+    try {
+      await redis.set(k, JSON.stringify(entry), 'PX', CODE_TTL_MS);
+    } catch (e) {
+      // fallback to in-memory
+      codes.set(k, entry);
+    }
+  } else {
+    codes.set(k, entry);
+  }
   return {
     ok: true,
     cooldownSec: Math.floor(COOLDOWN_MS / 1000),
@@ -171,6 +209,41 @@ export function consumeSmsCode(
   }
 
   const k = key(phone, purpose);
+  // Redis-backed flow
+  if (redis) {
+    // best-effort atomic-like handling via GET/SET
+    try {
+      const raw = await redis.get(k);
+      if (!raw) return { ok: false, error: '请先获取短信验证码' };
+      const entry = JSON.parse(raw) as CodeEntry;
+      const now = Date.now();
+      if (now > entry.expiresAt) {
+        await redis.del(k);
+        return { ok: false, error: '验证码已过期，请重新获取' };
+      }
+      if (entry.attempts >= MAX_ATTEMPTS) {
+        await redis.del(k);
+        return { ok: false, error: '验证码错误次数过多，请重新获取' };
+      }
+      if (entry.code !== code) {
+        entry.attempts = (entry.attempts || 0) + 1;
+        // update with remaining TTL
+        const ttl = await redis.pttl(k);
+        if (ttl > 0) {
+          await redis.set(k, JSON.stringify(entry), 'PX', ttl);
+        } else {
+          await redis.del(k);
+        }
+        return { ok: false, error: '短信验证码不正确' };
+      }
+      // correct code: delete key and return success
+      await redis.del(k);
+      return { ok: true };
+    } catch (e) {
+      // fallback to memory
+    }
+  }
+
   const entry = codes.get(k);
   if (!entry) {
     return { ok: false, error: '请先获取短信验证码' };
