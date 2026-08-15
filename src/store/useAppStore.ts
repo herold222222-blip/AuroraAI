@@ -1291,6 +1291,10 @@ export const useAppStore = create<AppState>((set, get) => {
         hydrateBag(bag, name);
       } catch (err) {
         console.error('[projects] hydrate', err);
+        get().pushToast(
+          err instanceof Error ? err.message : '云端项目加载失败',
+          'error',
+        );
       }
     },
 

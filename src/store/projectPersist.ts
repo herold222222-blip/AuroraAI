@@ -6,7 +6,36 @@ import {
   type RemoteProject,
 } from '../api/projectApi';
 import type { ProjectBag } from './projectBag';
-import { isScratchProjectId } from './projectBag';
+import { emptyImageBag, isScratchProjectId } from './projectBag';
+
+/** 解析失败时仍可出现在项目列表里的占位袋（避免「库里有、界面无」） */
+function stubBag(): ProjectBag {
+  return {
+    model: {
+      view: 'upload',
+      lastModelView: 'upload',
+      image: null,
+      grid: null,
+      layers: [],
+      selectedLayerId: null,
+      selectedLayerIds: [],
+      layerFilter: 'all',
+      config: {} as ProjectBag['model']['config'],
+      viewport: {} as ProjectBag['model']['viewport'],
+      exportSettings: {} as ProjectBag['model']['exportSettings'],
+      materialLibrary: [],
+      activePaint: null,
+      materialTool: 'none',
+      editTool: 'select',
+      cameraMode: false,
+      snapshots: [],
+      viewingSnapshotId: null,
+      imageSessionSnapshotIds: null,
+      meshyModelUrl: null,
+    },
+    image: emptyImageBag(),
+  };
+}
 
 const LAST_FORMAL_KEY = 'aurora-last-formal-project';
 
@@ -198,8 +227,10 @@ export async function loadRemoteProjects(
   for (const p of res.projects || []) {
     try {
       out.push({ ...p, bag: reviveProjectBag(p.bag) });
-    } catch {
-      /* skip broken rows */
+    } catch (err) {
+      // 仍保留列表项，避免「接口有项目、界面空白」；打开时用空袋
+      console.error('[projects] revive failed', p.id, p.name, err);
+      out.push({ ...p, bag: stubBag() });
     }
   }
   return out;
