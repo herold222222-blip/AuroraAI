@@ -179,24 +179,25 @@ export async function findActivePendingOrder(
         `SELECT * FROM orders WHERE user_id=$1 AND status IN ('pending','user_paying') AND expire_at>$2 AND code_url IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
         [userId, now],
       );
-      if (!res.rows || res.rows.length === 0) return null;
-      const r = res.rows[0];
-      return {
-        id: r.id,
-        outTradeNo: r.out_trade_no,
-        userId: r.user_id,
-        amountFen: Number(r.amount_fen),
-        amountYuan: Number(r.amount_yuan),
-        message: r.message,
-        status: r.status,
-        codeUrl: r.code_url,
-        expireAt: Number(r.expire_at || 0),
-        createdAt: epochMs(r.created_at) || 0,
-        updatedAt: epochMs(r.updated_at) || 0,
-        transactionId: r.transaction_id || undefined,
-        paidAt: epochMs(r.paid_at),
-        payerOpenid: r.payer_openid || undefined,
-      } as PayOrder;
+      if (res.rows?.length) {
+        const r = res.rows[0];
+        return {
+          id: r.id,
+          outTradeNo: r.out_trade_no,
+          userId: r.user_id,
+          amountFen: Number(r.amount_fen),
+          amountYuan: Number(r.amount_yuan),
+          message: r.message,
+          status: r.status,
+          codeUrl: r.code_url,
+          expireAt: Number(r.expire_at || 0),
+          createdAt: epochMs(r.created_at) || 0,
+          updatedAt: epochMs(r.updated_at) || 0,
+          transactionId: r.transaction_id || undefined,
+          paidAt: epochMs(r.paid_at),
+          payerOpenid: r.payer_openid || undefined,
+        } as PayOrder;
+      }
     } catch (e) {
       console.error('pg findActivePendingOrder', e);
     }
@@ -239,16 +240,50 @@ export async function createPayOrder(input: {
     updatedAt: now,
   };
 
-  // NOTE: do not persist to Postgres at order creation time to avoid premature
-  // DB rows for unpaid orders. Persist to blob/file store for ephemeral access
-  // and only write to Postgres when payment is confirmed (see `updatePayOrder`).
-  const db = await loadDb();
-  const now2 = Date.now();
-  const o2 = { ...order, createdAt: now2, updatedAt: now2 };
-  db.orders.unshift(o2);
-  if (db.orders.length > 2000) db.orders.length = 2000;
-  await saveDb(db);
-  return o2;
+  // 必须同时写入 Postgres：履约/钱包都读库；仅写本地文件会导致「付了多笔库里只有一笔」
+  if (process.env.DATABASE_URL) {
+    try {
+      const pool = getPool();
+      await pool.query(
+        `INSERT INTO orders (id, out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (out_trade_no) DO UPDATE SET
+           code_url=EXCLUDED.code_url,
+           expire_at=EXCLUDED.expire_at,
+           message=EXCLUDED.message,
+           amount_fen=EXCLUDED.amount_fen,
+           amount_yuan=EXCLUDED.amount_yuan,
+           status=EXCLUDED.status,
+           updated_at=EXCLUDED.updated_at`,
+        [
+          order.id,
+          order.outTradeNo,
+          order.userId,
+          order.amountFen,
+          order.amountYuan,
+          order.status,
+          order.message,
+          order.codeUrl,
+          order.expireAt,
+          order.createdAt,
+          order.updatedAt,
+        ],
+      );
+    } catch (e) {
+      console.error('[pay] createPayOrder pg insert', e);
+      throw e instanceof Error ? e : new Error(String(e));
+    }
+  }
+
+  try {
+    const db = await loadDb();
+    db.orders.unshift(order);
+    if (db.orders.length > 2000) db.orders.length = 2000;
+    await saveDb(db);
+  } catch (e) {
+    console.error('[pay] createPayOrder file mirror', e);
+  }
+  return order;
 }
 
 export async function updatePayOrder(
@@ -386,47 +421,59 @@ export async function closeOpenOrdersForUser(
   userId: string,
   exceptOutTradeNo?: string,
 ): Promise<PayOrder[]> {
+  const closed: PayOrder[] = [];
+  const now = Date.now();
+
   if (process.env.DATABASE_URL) {
     try {
       const pool = getPool();
-      const now = Date.now();
       const res = await pool.query(
         `UPDATE orders SET status='closed', updated_at=$1 WHERE user_id=$2 AND status IN ('pending','user_paying') ${exceptOutTradeNo ? `AND out_trade_no<>$3` : ''} RETURNING *`,
         exceptOutTradeNo ? [now, userId, exceptOutTradeNo] : [now, userId],
       );
-      return (res.rows || []).map((r: any) => ({
-        id: r.id,
-        outTradeNo: r.out_trade_no,
-        userId: r.user_id,
-        amountFen: Number(r.amount_fen),
-        amountYuan: Number(r.amount_yuan),
-        message: r.message,
-        status: r.status,
-        codeUrl: r.code_url,
-        expireAt: Number(r.expire_at || 0),
-        createdAt: epochMs(r.created_at) || 0,
-        updatedAt: epochMs(r.updated_at) || 0,
-        transactionId: r.transaction_id || undefined,
-        paidAt: epochMs(r.paid_at),
-        payerOpenid: r.payer_openid || undefined,
-      } as PayOrder));
+      for (const r of res.rows || []) {
+        closed.push({
+          id: r.id,
+          outTradeNo: r.out_trade_no,
+          userId: r.user_id,
+          amountFen: Number(r.amount_fen),
+          amountYuan: Number(r.amount_yuan),
+          message: r.message,
+          status: r.status,
+          codeUrl: r.code_url,
+          expireAt: Number(r.expire_at || 0),
+          createdAt: epochMs(r.created_at) || 0,
+          updatedAt: epochMs(r.updated_at) || 0,
+          transactionId: r.transaction_id || undefined,
+          paidAt: epochMs(r.paid_at),
+          payerOpenid: r.payer_openid || undefined,
+        } as PayOrder);
+      }
     } catch (e) {
       console.error('pg closeOpenOrdersForUser', e);
     }
   }
-  const db = await loadDb();
-  const closed: PayOrder[] = [];
-  const now = Date.now();
-  for (let i = 0; i < db.orders.length; i++) {
-    const o = db.orders[i];
-    if (o.userId !== userId) continue;
-    if (exceptOutTradeNo && o.outTradeNo === exceptOutTradeNo) continue;
-    if (!isOpenStatus(o.status)) continue;
-    const next = { ...o, status: 'closed' as const, updatedAt: now };
-    db.orders[i] = next;
-    closed.push(next);
+
+  // 同步关闭本地镜像，避免「库关了、文件里还是 pending」
+  try {
+    const db = await loadDb();
+    let dirty = false;
+    for (let i = 0; i < db.orders.length; i++) {
+      const o = db.orders[i];
+      if (o.userId !== userId) continue;
+      if (exceptOutTradeNo && o.outTradeNo === exceptOutTradeNo) continue;
+      if (!isOpenStatus(o.status)) continue;
+      const next = { ...o, status: 'closed' as const, updatedAt: now };
+      db.orders[i] = next;
+      dirty = true;
+      if (!closed.some((c) => c.outTradeNo === next.outTradeNo)) {
+        closed.push(next);
+      }
+    }
+    if (dirty) await saveDb(db);
+  } catch (e) {
+    console.error('file closeOpenOrdersForUser', e);
   }
-  if (closed.length) await saveDb(db);
   return closed;
 }
 
@@ -444,35 +491,50 @@ export async function listPaidOrdersByUser(
   userId: string,
 ): Promise<PayOrder[]> {
   if (!userId) return [];
+  const byNo = new Map<string, PayOrder>();
+
   if (process.env.DATABASE_URL) {
     try {
       const pool = getPool();
-      const res = await pool.query(`SELECT * FROM orders WHERE user_id=$1 AND status='paid' ORDER BY COALESCE(paid_at, created_at) DESC`, [userId]);
-      return (res.rows || []).map((r: any) => ({
-        id: r.id,
-        outTradeNo: r.out_trade_no,
-        userId: r.user_id,
-        amountFen: Number(r.amount_fen),
-        amountYuan: Number(r.amount_yuan),
-        message: r.message,
-        status: r.status,
-        codeUrl: r.code_url,
-        expireAt: Number(r.expire_at || 0),
-        createdAt: epochMs(r.created_at) || 0,
-        updatedAt: epochMs(r.updated_at) || 0,
-        transactionId: r.transaction_id || undefined,
-        paidAt: epochMs(r.paid_at),
-        payerOpenid: r.payer_openid || undefined,
-      } as PayOrder));
+      const res = await pool.query(
+        `SELECT * FROM orders WHERE user_id=$1 AND status='paid' ORDER BY COALESCE(paid_at, created_at) DESC`,
+        [userId],
+      );
+      for (const r of res.rows || []) {
+        byNo.set(r.out_trade_no, {
+          id: r.id,
+          outTradeNo: r.out_trade_no,
+          userId: r.user_id,
+          amountFen: Number(r.amount_fen),
+          amountYuan: Number(r.amount_yuan),
+          message: r.message,
+          status: 'paid',
+          codeUrl: r.code_url,
+          expireAt: Number(r.expire_at || 0),
+          createdAt: epochMs(r.created_at) || 0,
+          updatedAt: epochMs(r.updated_at) || 0,
+          transactionId: r.transaction_id || undefined,
+          paidAt: epochMs(r.paid_at),
+          payerOpenid: r.payer_openid || undefined,
+        } as PayOrder);
+      }
     } catch (e) {
       console.error('pg listPaidOrdersByUser', e);
     }
   }
-  const db = await loadDb();
-  return db.orders
-    .filter((o) => o.userId === userId && o.status === 'paid')
-    .sort(
-      (a, b) =>
-        (b.paidAt || b.createdAt) - (a.paidAt || a.createdAt),
-    );
+
+  try {
+    const db = await loadDb();
+    for (const o of db.orders) {
+      if (o.userId === userId && o.status === 'paid' && !byNo.has(o.outTradeNo)) {
+        byNo.set(o.outTradeNo, o);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return [...byNo.values()].sort(
+    (a, b) => (b.paidAt || b.createdAt) - (a.paidAt || a.createdAt),
+  );
 }

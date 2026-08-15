@@ -188,71 +188,100 @@ async function fulfillPaidOrder(
     );
   }
   const paidAt = Date.now();
-  // If Postgres available, perform atomic transaction: mark order paid and insert sponsorship
+
   if (process.env.DATABASE_URL) {
     const pool = getPool();
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      // lock the order row for update to ensure idempotency
-      const sel = await client.query('SELECT * FROM orders WHERE out_trade_no=$1 FOR UPDATE', [order.outTradeNo]);
-      if (sel.rowCount && sel.rows[0].status === 'paid') {
-        const r = sel.rows[0];
+      const sel = await client.query(
+        'SELECT * FROM orders WHERE out_trade_no=$1 FOR UPDATE',
+        [order.outTradeNo],
+      );
+
+      let row = sel.rows?.[0];
+      if (row?.status === 'paid') {
         await client.query('COMMIT');
         return {
-          id: r.id,
-          outTradeNo: r.out_trade_no,
-          userId: r.user_id,
-          amountFen: Number(r.amount_fen),
-          amountYuan: Number(r.amount_yuan),
-          message: r.message,
-          status: r.status,
-          codeUrl: r.code_url,
-          expireAt: Number(r.expire_at || 0),
-          createdAt: Number(r.created_at || 0),
-          updatedAt: Number(r.updated_at || 0),
-          transactionId: r.transaction_id || undefined,
-          paidAt: r.paid_at || undefined,
-          payerOpenid: r.payer_openid || undefined,
+          id: row.id,
+          outTradeNo: row.out_trade_no,
+          userId: row.user_id,
+          amountFen: Number(row.amount_fen),
+          amountYuan: Number(row.amount_yuan),
+          message: row.message || '',
+          status: 'paid',
+          codeUrl: row.code_url,
+          expireAt: Number(row.expire_at || 0),
+          createdAt: Number(row.created_at || 0),
+          updatedAt: Number(row.updated_at || 0),
+          transactionId: row.transaction_id || undefined,
+          paidAt: row.paid_at || undefined,
+          payerOpenid: row.payer_openid || undefined,
         } as PayOrder;
       }
 
-      const res = await client.query(
-        `UPDATE orders SET status='paid', transaction_id=$1, paid_at=$2, payer_openid=$3, updated_at=$4 WHERE out_trade_no=$5 RETURNING *`,
-        [info.transactionId, paidAt, info.payerOpenid || null, Date.now(), order.outTradeNo],
-      );
+      if (!row) {
+        // 历史：下单只写了本地文件，履约时补插入库
+        await client.query(
+          `INSERT INTO orders (id, out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at, transaction_id, paid_at, payer_openid)
+           VALUES ($1,$2,$3,$4,$5,'paid',$6,$7,$8,$9,$10,$11,$12,$13)
+           ON CONFLICT (out_trade_no) DO UPDATE SET
+             status='paid',
+             transaction_id=EXCLUDED.transaction_id,
+             paid_at=EXCLUDED.paid_at,
+             payer_openid=EXCLUDED.payer_openid,
+             updated_at=EXCLUDED.updated_at
+           RETURNING *`,
+          [
+            order.id,
+            order.outTradeNo,
+            order.userId,
+            order.amountFen,
+            order.amountYuan,
+            order.message || null,
+            order.codeUrl,
+            order.expireAt,
+            order.createdAt,
+            paidAt,
+            info.transactionId || null,
+            paidAt,
+            info.payerOpenid || null,
+          ],
+        );
+      } else {
+        await client.query(
+          `UPDATE orders SET status='paid', transaction_id=$1, paid_at=$2, payer_openid=$3, updated_at=$4 WHERE out_trade_no=$5`,
+          [
+            info.transactionId,
+            paidAt,
+            info.payerOpenid || null,
+            paidAt,
+            order.outTradeNo,
+          ],
+        );
+      }
 
-      const ps = await client.query('SELECT id FROM sponsorships WHERE out_trade_no=$1', [order.outTradeNo]);
-      if (ps.rowCount === 0) {
+      const ps = await client.query(
+        'SELECT id FROM sponsorships WHERE out_trade_no=$1',
+        [order.outTradeNo],
+      );
+      if (!ps.rowCount) {
         await client.query(
           `INSERT INTO sponsorships (sponsor_id, target_user_id, amount_cents, message, out_trade_no, transaction_id, pay_channel, paid_at, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [order.userId, order.userId, order.amountFen, order.message || null, order.outTradeNo, info.transactionId, 'wechat', paidAt, paidAt],
+           VALUES ($1,$2,$3,$4,$5,$6,'wechat',$7,$7)`,
+          [
+            order.userId,
+            order.userId,
+            order.amountFen,
+            order.message || null,
+            order.outTradeNo,
+            info.transactionId || null,
+            paidAt,
+          ],
         );
       }
 
       await client.query('COMMIT');
-      // return updated order from DB
-      if (res.rows && res.rows[0]) {
-        const r = res.rows[0];
-        return {
-          id: r.id,
-          outTradeNo: r.out_trade_no,
-          userId: r.user_id,
-          amountFen: Number(r.amount_fen),
-          amountYuan: Number(r.amount_yuan),
-          message: r.message,
-          status: r.status,
-          codeUrl: r.code_url,
-          expireAt: Number(r.expire_at || 0),
-          createdAt: Number(r.created_at || 0),
-          updatedAt: Number(r.updated_at || 0),
-          transactionId: r.transaction_id || undefined,
-          paidAt: r.paid_at || undefined,
-          payerOpenid: r.payer_openid || undefined,
-        } as PayOrder;
-      }
-      return { ...order, status: 'paid', transactionId: info.transactionId, paidAt } as PayOrder;
     } catch (e) {
       await client.query('ROLLBACK');
       console.error('[pay] fulfillPaidOrder tx', e);
@@ -260,6 +289,42 @@ async function fulfillPaidOrder(
     } finally {
       client.release();
     }
+
+    // 同步 users.sponsorships JSON，供旧读路径 / 管理端留言用
+    try {
+      await addSponsorship(order.userId, order.amountYuan, order.message || '', {
+        outTradeNo: order.outTradeNo,
+        transactionId: info.transactionId,
+        payChannel: 'wechat',
+        paidAt,
+      });
+    } catch (e) {
+      console.error('[pay] addSponsorship mirror', e);
+    }
+
+    // 刷新本地文件镜像
+    try {
+      await updatePayOrder(order.outTradeNo, {
+        status: 'paid',
+        transactionId: info.transactionId,
+        paidAt,
+        payerOpenid: info.payerOpenid,
+      });
+    } catch {
+      /* ignore */
+    }
+
+    const paid = await findOrderByOutTradeNo(order.outTradeNo);
+    return (
+      paid ||
+      ({
+        ...order,
+        status: 'paid',
+        transactionId: info.transactionId,
+        paidAt,
+        payerOpenid: info.payerOpenid,
+      } as PayOrder)
+    );
   }
 
   // Fallback: file-based operations
@@ -363,9 +428,39 @@ export async function handleCreateDonateOrder(
       }
     }
 
-    // 换金额 / 强制刷新：关闭旧单，重新下单
+    // 换金额 / 强制刷新：先向微信同步旧单（避免已付款被误关），再关单重下
+    const existingOpen = await findActivePendingOrder(payload.sub);
+    if (existingOpen) {
+      const syncedOld = await syncOrderWithWechat(existingOpen);
+      if (syncedOld.status === 'paid') {
+        // 旧码其实已付清；若本次只要刷新且同额，直接返回已支付单
+        if (!refresh || syncedOld.amountFen === amountFen) {
+          const user = await findById(payload.sub);
+          return ok({
+            order: publicOrder(syncedOld),
+            reused: true,
+            user: user ? toPublicUser(user) : null,
+          });
+        }
+      }
+    }
+
     const oldOpen = await closeOpenOrdersForUser(payload.sub);
     for (const o of oldOpen) {
+      // 关单前再查一次，已支付则履约而不是关掉
+      try {
+        const q = await queryByOutTradeNo(o.outTradeNo);
+        if (q.tradeState === 'SUCCESS') {
+          await fulfillPaidOrder(o, {
+            transactionId: q.transactionId || '',
+            amountTotal: q.amountTotal ?? o.amountFen,
+            payerOpenid: q.payerOpenid,
+          });
+          continue;
+        }
+      } catch (e) {
+        console.warn('[pay] sync-before-close', o.outTradeNo, e);
+      }
       void closeOutTradeNo(o.outTradeNo);
     }
 
@@ -451,7 +546,41 @@ export async function handleListMyDonateRecords(
       });
     }
 
-    // 兼容仅有 sponsorships、无订单快照的历史记录
+    // sponsorships 表（履约主写入）；补齐仅有表记录、订单状态异常的情况
+    if (process.env.DATABASE_URL) {
+      try {
+        const pool = getPool();
+        const sp = await pool.query(
+          `SELECT id, amount_cents, message, out_trade_no, transaction_id, paid_at, created_at
+           FROM sponsorships
+           WHERE sponsor_id=$1
+           ORDER BY COALESCE(paid_at, created_at) DESC`,
+          [payload.sub],
+        );
+        for (const r of sp.rows || []) {
+          const no = r.out_trade_no ? String(r.out_trade_no) : '';
+          if (no && seen.has(no)) continue;
+          if (no) seen.add(no);
+          const paidAt = Number(r.paid_at || r.created_at || Date.now());
+          const cents = Number(r.amount_cents || 0);
+          records.push({
+            id: String(r.id),
+            amount: Math.round(cents) / 100,
+            message: r.message || '',
+            createdAt: paidAt,
+            paidAt,
+            outTradeNo: no || undefined,
+            transactionId: r.transaction_id || undefined,
+            payChannel: 'wechat',
+            status: 'paid',
+          });
+        }
+      } catch (e) {
+        console.error('[pay] list sponsorships', e);
+      }
+    }
+
+    // 兼容仅有 users.sponsorships JSON、无订单快照的历史记录
     for (const s of user?.sponsorships || []) {
       if (s.outTradeNo && seen.has(s.outTradeNo)) continue;
       if (s.outTradeNo) seen.add(s.outTradeNo);
