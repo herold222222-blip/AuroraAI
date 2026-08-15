@@ -40,6 +40,9 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
   const [pollHint, setPollHint] = useState('');
   const [ready, setReady] = useState(false);
   const [createError, setCreateError] = useState('');
+  /** 外部二维码图片（qrserver）加载中 */
+  const [qrImgLoading, setQrImgLoading] = useState(false);
+  const [qrImgError, setQrImgError] = useState(false);
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadlineRef = useRef<number>(0);
@@ -66,6 +69,16 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     orderRef.current = order;
   }, [order]);
+
+  useEffect(() => {
+    if (!order?.codeUrl || qrExpired) {
+      setQrImgLoading(false);
+      setQrImgError(false);
+      return;
+    }
+    setQrImgLoading(true);
+    setQrImgError(false);
+  }, [order?.codeUrl, order?.outTradeNo, qrExpired]);
 
   useEffect(() => {
     messageRef.current = message;
@@ -316,6 +329,8 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
 
   const statusLabel = (() => {
     if (creating) return '正在生成收款码…';
+    if (order?.codeUrl && !qrExpired && qrImgLoading) return '二维码加载中…';
+    if (order?.codeUrl && qrImgError) return '二维码图片加载失败，请刷新';
     if (!order) {
       return createError ? '生成失败' : '仅支持微信扫码支付';
     }
@@ -326,6 +341,9 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
     if (order.status === 'paid') return '支付成功';
     return '仅支持微信扫码支付';
   })();
+
+  const showQrImg = Boolean(order?.codeUrl && !qrExpired && !creating);
+  const showLoadingBox = creating || (showQrImg && qrImgLoading && !qrImgError);
 
   return createPortal(
     <div className="donate-page" data-auth-free role="dialog" aria-modal="true">
@@ -345,26 +363,57 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
           <div
             className={`donate-qr-frame${
               qrExpired || order?.status === 'expired' ? ' is-expired' : ''
-            }${creating ? ' is-loading' : ''}`}
+            }${showLoadingBox ? ' is-loading' : ''}`}
+            aria-busy={showLoadingBox}
           >
-            {order?.codeUrl && !qrExpired && !creating ? (
+            {showQrImg ? (
               <img
-                src={qrImageSrc(order.codeUrl)}
+                key={order!.codeUrl}
+                src={qrImageSrc(order!.codeUrl)}
                 alt="微信扫码支付二维码"
                 width={220}
                 height={220}
+                className={qrImgLoading || qrImgError ? 'is-pending' : ''}
+                onLoad={() => {
+                  setQrImgLoading(false);
+                  setQrImgError(false);
+                }}
+                onError={() => {
+                  setQrImgLoading(false);
+                  setQrImgError(true);
+                }}
               />
-            ) : (
+            ) : null}
+
+            {showLoadingBox ? (
+              <div className="donate-qr-loading" role="status">
+                <span className="donate-qr-spinner" aria-hidden />
+                <span>
+                  {creating ? '正在生成收款码…' : '二维码加载中…'}
+                </span>
+              </div>
+            ) : null}
+
+            {!showQrImg && !showLoadingBox ? (
               <div className="donate-qr-placeholder">
-                {creating
-                  ? '正在生成微信收款码…'
-                  : qrExpired || order?.status === 'expired'
-                    ? '二维码已过期，请刷新或切换金额'
-                    : createError
-                      ? createError
+                {qrExpired || order?.status === 'expired'
+                  ? '二维码已过期，请刷新或切换金额'
+                  : createError
+                    ? createError
+                    : qrImgError
+                      ? '二维码图片加载失败，请点击刷新'
                       : '请选择赞赏金额'}
               </div>
-            )}
+            ) : null}
+
+            {qrImgError && showQrImg ? (
+              <div className="donate-qr-placeholder donate-qr-load-error">
+                二维码图片加载失败
+                <br />
+                请点击下方「刷新二维码」
+              </div>
+            ) : null}
+
             {(qrExpired || order?.status === 'expired') && order?.codeUrl ? (
               <div className="donate-qr-expired-mask">已过期</div>
             ) : null}
