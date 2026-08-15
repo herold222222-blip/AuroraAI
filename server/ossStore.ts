@@ -119,8 +119,9 @@ export async function getObjectBuffer(key: string): Promise<{
   const buffer = Buffer.isBuffer(content)
     ? content
     : Buffer.from(content || '');
-  const headerType =
-    (r.res?.headers?.['content-type'] as string | undefined) || '';
+  const headers = (r.res?.headers ?? {}) as Record<string, unknown>;
+  const rawType = headers['content-type'] ?? headers['Content-Type'];
+  const headerType = typeof rawType === 'string' ? rawType : '';
   const contentType =
     headerType ||
     (key.endsWith('.png')
