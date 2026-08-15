@@ -373,55 +373,35 @@ export async function markOrderExpiredIfNeeded(
   return updated || { ...order, status: 'expired' };
 }
 
-/** 用户已支付订单（打赏记录 / 累计） */
+/** 用户已支付订单（仅 Postgres；无库则空） */
 export async function listPaidOrdersByUser(
   userId: string,
 ): Promise<PayOrder[]> {
-  if (!userId) return [];
-  const byNo = new Map<string, PayOrder>();
-
-  if (process.env.DATABASE_URL) {
-    try {
-      const pool = getPool();
-      const res = await pool.query(
-        `SELECT * FROM orders WHERE user_id=$1 AND status='paid' ORDER BY COALESCE(paid_at, created_at) DESC`,
-        [userId],
-      );
-      for (const r of res.rows || []) {
-        byNo.set(r.out_trade_no, {
-          id: r.id,
-          outTradeNo: r.out_trade_no,
-          userId: r.user_id,
-          amountFen: Number(r.amount_fen),
-          amountYuan: Number(r.amount_yuan),
-          message: r.message,
-          status: 'paid',
-          codeUrl: r.code_url,
-          expireAt: Number(r.expire_at || 0),
-          createdAt: epochMs(r.created_at) || 0,
-          updatedAt: epochMs(r.updated_at) || 0,
-          transactionId: r.transaction_id || undefined,
-          paidAt: epochMs(r.paid_at),
-          payerOpenid: r.payer_openid || undefined,
-        } as PayOrder);
-      }
-    } catch (e) {
-      console.error('pg listPaidOrdersByUser', e);
-    }
-  }
-
+  if (!userId || !process.env.DATABASE_URL) return [];
   try {
-    const db = await loadDb();
-    for (const o of db.orders) {
-      if (o.userId === userId && o.status === 'paid' && !byNo.has(o.outTradeNo)) {
-        byNo.set(o.outTradeNo, o);
-      }
-    }
-  } catch {
-    /* ignore */
+    const pool = getPool();
+    const res = await pool.query(
+      `SELECT * FROM orders WHERE user_id=$1 AND status='paid' ORDER BY COALESCE(paid_at, created_at) DESC`,
+      [userId],
+    );
+    return (res.rows || []).map((r) => ({
+      id: r.id,
+      outTradeNo: r.out_trade_no,
+      userId: r.user_id,
+      amountFen: Number(r.amount_fen),
+      amountYuan: Number(r.amount_yuan),
+      message: r.message,
+      status: 'paid' as const,
+      codeUrl: r.code_url,
+      expireAt: Number(r.expire_at || 0),
+      createdAt: epochMs(r.created_at) || 0,
+      updatedAt: epochMs(r.updated_at) || 0,
+      transactionId: r.transaction_id || undefined,
+      paidAt: epochMs(r.paid_at),
+      payerOpenid: r.payer_openid || undefined,
+    }));
+  } catch (e) {
+    console.error('pg listPaidOrdersByUser', e);
+    return [];
   }
-
-  return [...byNo.values()].sort(
-    (a, b) => (b.paidAt || b.createdAt) - (a.paidAt || a.createdAt),
-  );
 }

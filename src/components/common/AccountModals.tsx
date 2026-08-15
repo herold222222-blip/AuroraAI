@@ -401,28 +401,8 @@ export function WalletModal({ onClose }: { onClose: () => void }) {
       .catch((err) => {
         if (cancelled) return;
         setDonateError(err instanceof Error ? err.message : String(err));
-        // 回退：至少展示 user 上已有的 sponsorships
-        const fallback = [...(user?.sponsorships || [])].sort(
-          (a, b) => b.createdAt - a.createdAt,
-        );
-        setDonateRecords(
-          fallback.map((r) => ({
-            id: r.id,
-            amount: r.amount,
-            message: r.message,
-            createdAt: r.createdAt,
-            paidAt: r.paidAt || r.createdAt,
-            outTradeNo: r.outTradeNo,
-            transactionId: r.transactionId,
-            payChannel: 'wechat' as const,
-            status: 'paid' as const,
-          })),
-        );
-        setDonateTotal(
-          typeof user?.sponsorshipTotal === 'number'
-            ? user.sponsorshipTotal
-            : fallback.reduce((s, r) => s + (Number(r.amount) || 0), 0),
-        );
+        setDonateRecords([]);
+        setDonateTotal(0);
       })
       .finally(() => {
         if (!cancelled) setDonateLoading(false);

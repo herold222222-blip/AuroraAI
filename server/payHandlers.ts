@@ -6,7 +6,6 @@ import {
   createPayOrder,
   findActivePendingOrder,
   findOrderByOutTradeNo,
-  listPaidOrdersByUser,
   markOrderExpiredIfNeeded,
   newOutTradeNo,
   updatePayOrder,
@@ -495,17 +494,26 @@ export async function handleGetPendingDonateOrder(
   return ok({ order: publicOrder(synced) });
 }
 
-/** 我的钱包：已支付打赏订单 + 累计金额 */
+/** 我的钱包：仅读数据库 orders 已支付记录 */
 export async function handleListMyDonateRecords(
   headers: Record<string, string | string[] | undefined>,
 ): Promise<PayResult> {
   const payload = await resolvePayAuth(headers);
   if (!payload) return fail('请先登录', 401);
 
+  if (!process.env.DATABASE_URL) {
+    return fail('数据库未配置，无法读取支付记录', 503);
+  }
+
   try {
-    const paidOrders = await listPaidOrdersByUser(payload.sub);
-    const user = await findById(payload.sub);
-    const seen = new Set<string>();
+    const pool = getPool();
+    const res = await pool.query(
+      `SELECT id, out_trade_no, amount_yuan, amount_fen, message, transaction_id, paid_at, created_at
+       FROM orders
+       WHERE user_id=$1 AND status='paid'
+       ORDER BY COALESCE(paid_at, created_at) DESC`,
+      [payload.sub],
+    );
 
     type Row = {
       id: string;
@@ -520,79 +528,43 @@ export async function handleListMyDonateRecords(
     };
 
     const records: Row[] = [];
-
-    for (const o of paidOrders) {
-      seen.add(o.outTradeNo);
-      const paidAt = o.paidAt || o.createdAt;
-      records.push({
-        id: o.id,
-        amount: o.amountYuan,
-        message: o.message || '',
-        createdAt: paidAt,
-        paidAt,
-        outTradeNo: o.outTradeNo,
-        transactionId: o.transactionId,
-        payChannel: 'wechat',
-        status: 'paid',
-      });
-    }
-
-    // sponsorships 表（履约主写入）；补齐仅有表记录、订单状态异常的情况
-    if (process.env.DATABASE_URL) {
-      try {
-        const pool = getPool();
-        const sp = await pool.query(
-          `SELECT id, amount_cents, message, out_trade_no, transaction_id, paid_at, created_at
-           FROM sponsorships
-           WHERE sponsor_id=$1
-           ORDER BY COALESCE(paid_at, created_at) DESC`,
-          [payload.sub],
-        );
-        for (const r of sp.rows || []) {
-          const no = r.out_trade_no ? String(r.out_trade_no) : '';
-          if (no && seen.has(no)) continue;
-          if (no) seen.add(no);
-          const paidAt = Number(r.paid_at || r.created_at || Date.now());
-          const cents = Number(r.amount_cents || 0);
-          records.push({
-            id: String(r.id),
-            amount: Math.round(cents) / 100,
-            message: r.message || '',
-            createdAt: paidAt,
-            paidAt,
-            outTradeNo: no || undefined,
-            transactionId: r.transaction_id || undefined,
-            payChannel: 'wechat',
-            status: 'paid',
-          });
+    for (const r of res.rows || []) {
+      const paidAtRaw = r.paid_at ?? r.created_at;
+      let paidAt = Date.now();
+      if (paidAtRaw instanceof Date) {
+        paidAt = paidAtRaw.getTime();
+      } else if (typeof paidAtRaw === 'number' && Number.isFinite(paidAtRaw)) {
+        paidAt = paidAtRaw < 1e12 ? Math.round(paidAtRaw * 1000) : paidAtRaw;
+      } else if (paidAtRaw != null && paidAtRaw !== '') {
+        const n = Number(paidAtRaw);
+        if (Number.isFinite(n) && n > 0) {
+          paidAt = n < 1e12 ? Math.round(n * 1000) : n;
+        } else {
+          const parsed = Date.parse(String(paidAtRaw));
+          if (Number.isFinite(parsed)) paidAt = parsed;
         }
-      } catch (e) {
-        console.error('[pay] list sponsorships', e);
       }
-    }
-
-    // 兼容仅有 users.sponsorships JSON、无订单快照的历史记录
-    for (const s of user?.sponsorships || []) {
-      if (s.outTradeNo && seen.has(s.outTradeNo)) continue;
-      if (s.outTradeNo) seen.add(s.outTradeNo);
-      const paidAt = s.paidAt || s.createdAt;
+      const yuan =
+        r.amount_yuan != null
+          ? Number(r.amount_yuan)
+          : Math.round(Number(r.amount_fen || 0)) / 100;
       records.push({
-        id: s.id,
-        amount: s.amount,
-        message: s.message || '',
+        id: String(r.id),
+        amount: yuan,
+        message: r.message || '',
         createdAt: paidAt,
         paidAt,
-        outTradeNo: s.outTradeNo,
-        transactionId: s.transactionId,
+        outTradeNo: r.out_trade_no || undefined,
+        transactionId: r.transaction_id || undefined,
         payChannel: 'wechat',
         status: 'paid',
       });
     }
 
-    records.sort((a, b) => b.paidAt - a.paidAt);
     const total =
-      Math.round(records.reduce((sum, r) => sum + (Number(r.amount) || 0), 0) * 100) /
-      100;
+      Math.round(
+        records.reduce((sum, row) => sum + (Number(row.amount) || 0), 0) * 100,
+      ) / 100;
 
     return ok({
       records,
