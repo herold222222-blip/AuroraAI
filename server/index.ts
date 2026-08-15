@@ -1,6 +1,7 @@
 import { loadServerEnv } from './loadEnv';
 import { createApiApp } from './app';
 import { getWechatPayConfig } from './wechatPay';
+import { purgeUnpaidOrdersFromDb } from './orderStore';
 
 loadServerEnv();
 
@@ -14,4 +15,5 @@ app.listen(port, () => {
   } else {
     console.warn('[pay] wechat config incomplete — native pay disabled');
   }
+  void purgeUnpaidOrdersFromDb();
 });

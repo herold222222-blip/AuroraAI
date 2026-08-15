@@ -174,41 +174,10 @@ export async function findOrderByOutTradeNo(
   return db.orders.find((o) => o.outTradeNo === no) || null;
 }
 
-/** 用户当前未过期的待支付订单（防重复下单） */
+/** 用户当前未过期的待支付订单（防重复下单；待支付只存在本地镜像，不进 Postgres） */
 export async function findActivePendingOrder(
   userId: string,
 ): Promise<PayOrder | null> {
-  if (process.env.DATABASE_URL) {
-    try {
-      const pool = getPool();
-      const now = Date.now();
-      const res = await pool.query(
-        `SELECT * FROM orders WHERE user_id=$1 AND status IN ('pending','user_paying') AND expire_at>$2 AND code_url IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
-        [userId, now],
-      );
-      if (res.rows?.length) {
-        const r = res.rows[0];
-        return {
-          id: r.id,
-          outTradeNo: r.out_trade_no,
-          userId: r.user_id,
-          amountFen: Number(r.amount_fen),
-          amountYuan: Number(r.amount_yuan),
-          message: r.message,
-          status: r.status,
-          codeUrl: r.code_url,
-          expireAt: Number(r.expire_at || 0),
-          createdAt: epochMs(r.created_at) || 0,
-          updatedAt: epochMs(r.updated_at) || 0,
-          transactionId: r.transaction_id || undefined,
-          paidAt: epochMs(r.paid_at),
-          payerOpenid: r.payer_openid || undefined,
-        } as PayOrder;
-      }
-    } catch (e) {
-      console.error('pg findActivePendingOrder', e);
-    }
-  }
   const db = await loadDb();
   const now = Date.now();
   const open = db.orders
@@ -247,50 +216,7 @@ export async function createPayOrder(input: {
     updatedAt: now,
   };
 
-  // 写入 Postgres（id 交给数据库默认，避免 UUID/TEXT 类型与 ord_xxx 冲突）
-  if (process.env.DATABASE_URL) {
-    try {
-      const pool = getPool();
-      const res = await pool.query(
-        `INSERT INTO orders (out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-         ON CONFLICT (out_trade_no) DO UPDATE SET
-           code_url=EXCLUDED.code_url,
-           expire_at=EXCLUDED.expire_at,
-           message=EXCLUDED.message,
-           amount_fen=EXCLUDED.amount_fen,
-           amount_yuan=EXCLUDED.amount_yuan,
-           status=CASE
-             WHEN orders.status = 'paid' THEN orders.status
-             ELSE EXCLUDED.status
-           END,
-           updated_at=EXCLUDED.updated_at
-         RETURNING id`,
-        [
-          order.outTradeNo,
-          order.userId,
-          order.amountFen,
-          order.amountYuan,
-          order.status,
-          order.message,
-          order.codeUrl,
-          order.expireAt,
-          order.createdAt,
-          order.updatedAt,
-        ],
-      );
-      if (res.rows?.[0]?.id) {
-        order.id = String(res.rows[0].id);
-      }
-    } catch (e) {
-      // 不阻断下单：本地文件仍可支撑回调/轮询；履约时再 upsert 入库
-      console.error(
-        '[pay] createPayOrder pg insert failed（将仅写本地订单镜像）',
-        e,
-      );
-    }
-  }
-
+  // 待支付不写 Postgres，只落本地镜像；支付成功时再由 fulfillPaidOrder 入库
   try {
     const db = await loadDb();
     const idx = db.orders.findIndex((o) => o.outTradeNo === order.outTradeNo);
@@ -302,6 +228,23 @@ export async function createPayOrder(input: {
     console.error('[pay] createPayOrder file mirror', e);
   }
   return order;
+}
+
+/** 删除库里未支付成功的订单行（只保留 paid） */
+export async function purgeUnpaidOrdersFromDb(): Promise<number> {
+  if (!process.env.DATABASE_URL) return 0;
+  try {
+    const pool = getPool();
+    const res = await pool.query(
+      `DELETE FROM orders WHERE status IS DISTINCT FROM 'paid'`,
+    );
+    const n = res.rowCount || 0;
+    if (n > 0) console.log('[pay] purged unpaid orders from db', n);
+    return n;
+  } catch (e) {
+    console.error('[pay] purgeUnpaidOrdersFromDb', e);
+    return 0;
+  }
 }
 
 export async function updatePayOrder(
@@ -321,106 +264,6 @@ export async function updatePayOrder(
     >
   >,
 ): Promise<PayOrder | null> {
-  if (process.env.DATABASE_URL) {
-    try {
-      const pool = getPool();
-      const fields: string[] = [];
-      const vals: any[] = [];
-      let i = 1;
-      for (const [k, v] of Object.entries(patch)) {
-        if (k === 'codeUrl') {
-          fields.push(`code_url=$${i++}`);
-          vals.push(v);
-        } else if (k === 'transactionId') {
-          fields.push(`transaction_id=$${i++}`);
-          vals.push(v);
-        } else if (k === 'payerOpenid') {
-          fields.push(`payer_openid=$${i++}`);
-          vals.push(v);
-        } else if (k === 'paidAt') {
-          fields.push(`paid_at=$${i++}`);
-          vals.push(v);
-        } else if (k === 'expireAt') {
-          fields.push(`expire_at=$${i++}`);
-          vals.push(v);
-        } else if (k === 'message') {
-          fields.push(`message=$${i++}`);
-          vals.push(v);
-        } else if (k === 'status') {
-          fields.push(`status=$${i++}`);
-          vals.push(v);
-        } else if (k === 'amountFen') {
-          fields.push(`amount_fen=$${i++}`);
-          vals.push(v);
-        } else if (k === 'amountYuan') {
-          fields.push(`amount_yuan=$${i++}`);
-          vals.push(v);
-        }
-      }
-      if (fields.length === 0) return null;
-      fields.push(`updated_at=$${i++}`);
-      vals.push(Date.now());
-      const sql = `UPDATE orders SET ${fields.join(', ')} WHERE out_trade_no=$${i} RETURNING *`;
-      vals.push(outTradeNo);
-      const res = await pool.query(sql, vals);
-      if (!res.rows || res.rows.length === 0) {
-        // If there is no row updated, the order may not exist in Postgres because
-        // we defer insertion until payment. Load the order from blob/file store
-        // and insert it now with applied patch (only when patch contains paid status or transaction).
-        try {
-          const localDb = await loadDb();
-          const existing = localDb.orders.find((o) => o.outTradeNo === outTradeNo);
-          if (!existing) return null;
-          const next = { ...existing, ...patch, updatedAt: Date.now() } as PayOrder;
-          // insert into Postgres
-          await pool.query(
-            `INSERT INTO orders (id, out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at, transaction_id, paid_at, payer_openid)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-            [
-              next.id,
-              next.outTradeNo,
-              next.userId,
-              next.amountFen,
-              next.amountYuan,
-              next.status,
-              next.message,
-              next.codeUrl,
-              next.expireAt,
-              next.createdAt,
-              next.updatedAt,
-              next.transactionId || null,
-              next.paidAt || null,
-              next.payerOpenid || null,
-            ],
-          );
-          return next;
-        } catch (ie) {
-          console.error('pg insert-on-update missing row failed', ie);
-          // fallback to file handling below
-        }
-      }
-      const r = res.rows[0];
-      return {
-        id: r.id,
-        outTradeNo: r.out_trade_no,
-        userId: r.user_id,
-        amountFen: Number(r.amount_fen),
-        amountYuan: Number(r.amount_yuan),
-        message: r.message,
-        status: r.status,
-        codeUrl: r.code_url,
-        expireAt: Number(r.expire_at || 0),
-        createdAt: epochMs(r.created_at) || 0,
-        updatedAt: epochMs(r.updated_at) || 0,
-        transactionId: r.transaction_id || undefined,
-        paidAt: epochMs(r.paid_at),
-        payerOpenid: r.payer_openid || undefined,
-      } as PayOrder;
-    } catch (e) {
-      console.error('pg updatePayOrder', e);
-    }
-  }
-
   const db = await loadDb();
   const idx = db.orders.findIndex((o) => o.outTradeNo === outTradeNo);
   if (idx < 0) return null;
@@ -428,9 +271,53 @@ export async function updatePayOrder(
     ...db.orders[idx],
     ...patch,
     updatedAt: Date.now(),
-  };
+  } as PayOrder;
   db.orders[idx] = next;
   await saveDb(db);
+
+  // Postgres：仅持久化支付成功；其它状态只留文件，并清掉误写入的未支付行
+  if (process.env.DATABASE_URL) {
+    try {
+      const pool = getPool();
+      if (next.status === 'paid') {
+        await pool.query(
+          `INSERT INTO orders (out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at, transaction_id, paid_at, payer_openid)
+           VALUES ($1,$2,$3,$4,'paid',$5,$6,$7,$8,$9,$10,$11,$12)
+           ON CONFLICT (out_trade_no) DO UPDATE SET
+             status='paid',
+             message=EXCLUDED.message,
+             amount_fen=EXCLUDED.amount_fen,
+             amount_yuan=EXCLUDED.amount_yuan,
+             transaction_id=COALESCE(EXCLUDED.transaction_id, orders.transaction_id),
+             paid_at=COALESCE(EXCLUDED.paid_at, orders.paid_at),
+             payer_openid=COALESCE(EXCLUDED.payer_openid, orders.payer_openid),
+             updated_at=EXCLUDED.updated_at`,
+          [
+            next.outTradeNo,
+            next.userId,
+            next.amountFen,
+            next.amountYuan,
+            next.message || null,
+            next.codeUrl || null,
+            next.expireAt,
+            next.createdAt,
+            next.updatedAt,
+            next.transactionId || null,
+            next.paidAt || null,
+            next.payerOpenid || null,
+          ],
+        );
+      } else {
+        await pool.query(
+          `DELETE FROM orders WHERE out_trade_no=$1 AND status IS DISTINCT FROM 'paid'`,
+          [outTradeNo],
+        );
+      }
+    } catch (e) {
+      console.error('pg updatePayOrder', e);
+    }
+  }
+
   return next;
 }
 
@@ -442,37 +329,21 @@ export async function closeOpenOrdersForUser(
   const closed: PayOrder[] = [];
   const now = Date.now();
 
+  // 库中不应再有 pending；顺手清掉历史未支付行
   if (process.env.DATABASE_URL) {
     try {
       const pool = getPool();
-      const res = await pool.query(
-        `UPDATE orders SET status='closed', updated_at=$1 WHERE user_id=$2 AND status IN ('pending','user_paying') ${exceptOutTradeNo ? `AND out_trade_no<>$3` : ''} RETURNING *`,
-        exceptOutTradeNo ? [now, userId, exceptOutTradeNo] : [now, userId],
+      await pool.query(
+        `DELETE FROM orders WHERE user_id=$1 AND status IS DISTINCT FROM 'paid' ${
+          exceptOutTradeNo ? 'AND out_trade_no<>$2' : ''
+        }`,
+        exceptOutTradeNo ? [userId, exceptOutTradeNo] : [userId],
       );
-      for (const r of res.rows || []) {
-        closed.push({
-          id: r.id,
-          outTradeNo: r.out_trade_no,
-          userId: r.user_id,
-          amountFen: Number(r.amount_fen),
-          amountYuan: Number(r.amount_yuan),
-          message: r.message,
-          status: r.status,
-          codeUrl: r.code_url,
-          expireAt: Number(r.expire_at || 0),
-          createdAt: epochMs(r.created_at) || 0,
-          updatedAt: epochMs(r.updated_at) || 0,
-          transactionId: r.transaction_id || undefined,
-          paidAt: epochMs(r.paid_at),
-          payerOpenid: r.payer_openid || undefined,
-        } as PayOrder);
-      }
     } catch (e) {
-      console.error('pg closeOpenOrdersForUser', e);
+      console.error('pg closeOpenOrdersForUser purge', e);
     }
   }
 
-  // 同步关闭本地镜像，避免「库关了、文件里还是 pending」
   try {
     const db = await loadDb();
     let dirty = false;
@@ -484,9 +355,7 @@ export async function closeOpenOrdersForUser(
       const next = { ...o, status: 'closed' as const, updatedAt: now };
       db.orders[i] = next;
       dirty = true;
-      if (!closed.some((c) => c.outTradeNo === next.outTradeNo)) {
-        closed.push(next);
-      }
+      closed.push(next);
     }
     if (dirty) await saveDb(db);
   } catch (e) {
