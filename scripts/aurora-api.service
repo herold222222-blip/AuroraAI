@@ -1,30 +1,24 @@
 [Unit]
 Description=Aurora API (AuroraAI)
 After=network.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-# 运行该服务的用户（请按实际部署用户修改）
-User=deploy
-WorkingDirectory=/path/to/project
-# 指向项目下的 env 文件（请按实际路径创建并填入变量）
-EnvironmentFile=/path/to/project/.env
-# 如果你使用 node 运行已构建的 JS：
-ExecStart=/usr/bin/env node server/index.js
-# 若使用 tsx 直接运行源码，可改为：ExecStart=/usr/bin/env tsx server/index.ts
-
+User=admin
+Group=admin
+WorkingDirectory=/var/www/AuroraAI
+Environment=NODE_ENV=production
+EnvironmentFile=-/var/www/AuroraAI/.env
+EnvironmentFile=-/var/www/AuroraAI/.env.local
+# 不要用 pnpm 包一层：部分环境下 pnpm 会提前退出，systemd 误判为服务结束并反复重启
+# 导致微信回调打到 Nginx 全是 500，且看不到 [pay] notify hit
+ExecStart=/var/www/AuroraAI/node_modules/.bin/tsx /var/www/AuroraAI/server/index.ts
 Restart=always
-RestartSec=5
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=20
 LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target
-
-### 使用说明：
-### 1. 将本文件复制到 /etc/systemd/system/aurora-api.service
-###    sudo cp scripts/aurora-api.service /etc/systemd/system/aurora-api.service
-### 2. 编辑 /path/to/project/.env 填入环境变量（见 README_DEPLOY.md）
-### 3. 重新加载 systemd 并启动服务：
-###    sudo systemctl daemon-reload
-###    sudo systemctl enable --now aurora-api
-### 4. 查看日志： sudo journalctl -u aurora-api -f
