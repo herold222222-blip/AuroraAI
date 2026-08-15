@@ -173,18 +173,18 @@ export function createApiApp() {
     res.status(r.status).json(r.body);
   });
 
-  // Project workspace persistence
+  // Project workspace persistence（先注册精确路径，再注册 :id）
   app.post('/api/projects/save', async (req, res) => {
     const { handleSaveProject } = await import('./projectHandlers');
     return handleSaveProject(req, res);
   });
-  app.get('/api/projects/:id', async (req, res) => {
-    const { handleGetProject } = await import('./projectHandlers');
-    return handleGetProject(req, res);
-  });
   app.get('/api/projects', async (req, res) => {
     const { handleListMyProjects } = await import('./projectHandlers');
     return handleListMyProjects(req, res);
+  });
+  app.get('/api/projects/:id', async (req, res) => {
+    const { handleGetProject } = await import('./projectHandlers');
+    return handleGetProject(req, res);
   });
   app.delete('/api/projects/:id', async (req, res) => {
     const { handleDeleteProject } = await import('./projectHandlers');
