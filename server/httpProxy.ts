@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { setGlobalDispatcher, EnvHttpProxyAgent } from 'undici';
+import { createRequire } from 'node:module';
 
 function envProxy(): string {
   return (
@@ -45,6 +45,22 @@ function ensureNoProxyLocalhost() {
   process.env.no_proxy = process.env.NO_PROXY;
 }
 
+/** 若环境里装了 undici 再挂代理；没装也不影响 tsc / 打包。 */
+function applyUndiciDispatcher() {
+  try {
+    const require = createRequire(import.meta.url);
+    const undici = require('undici') as {
+      setGlobalDispatcher?: (dispatcher: unknown) => void;
+      EnvHttpProxyAgent?: new () => unknown;
+    };
+    if (undici.setGlobalDispatcher && undici.EnvHttpProxyAgent) {
+      undici.setGlobalDispatcher(new undici.EnvHttpProxyAgent());
+    }
+  } catch {
+    /* 服务器未安装 undici 时仅靠 NODE_USE_ENV_PROXY + HTTPS_PROXY */
+  }
+}
+
 /** 让 fetch / @google/genai 走本机 Clash 等代理，避免直连 Google 超时。 */
 export function applyHttpProxy() {
   process.env.NODE_USE_ENV_PROXY ??= '1';
@@ -63,13 +79,6 @@ export function applyHttpProxy() {
   process.env.https_proxy = proxy;
   process.env.http_proxy = proxy;
 
-  try {
-    setGlobalDispatcher(new EnvHttpProxyAgent());
-    console.log('[httpProxy] fetch 已走代理', proxy);
-  } catch (err) {
-    console.warn(
-      '[httpProxy] 应用代理失败',
-      err instanceof Error ? err.message : err,
-    );
-  }
+  applyUndiciDispatcher();
+  console.log('[httpProxy] fetch 已走代理', proxy);
 }
