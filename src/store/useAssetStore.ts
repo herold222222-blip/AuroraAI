@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { apiUrl } from '../config/api';
 import { useAuthStore } from './useAuthStore';
 
 export type AssetKind = 'image' | 'model';
@@ -143,7 +144,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     // 2) in background, fetch manifest from server and merge
     void (async () => {
       try {
-        const res = await fetch('/api/assets/manifest');
+        const res = await fetch(apiUrl('/api/assets/manifest'));
         if (!res.ok) return;
         const data = await res.json();
         if (!data?.entries || !Array.isArray(data.entries)) return;
@@ -329,4 +330,126 @@ export function registerGeneratedModel(input: {
       projectName: app.projectName,
     });
   });
+}
+
+function isAssetableUrl(url: string | null | undefined): url is string {
+  if (!url) return false;
+  if (url.startsWith('blob:')) return false;
+  if (url.startsWith('asset:')) return false;
+  if (url.startsWith('oss:')) return false;
+  return (
+    url.startsWith('data:') ||
+    url.startsWith('http://') ||
+    url.startsWith('https://')
+  );
+}
+
+/**
+ * 云端/切换项目时：改图袋里有图，但资产库是本机 IndexedDB，不会自动带上。
+ * 把项目袋中的图片/模型补登记到资产（按 url 去重）。
+ */
+export async function syncProjectBagToAssets(
+  bag: {
+    image: {
+      originalUrl?: string | null;
+      currentUrl?: string | null;
+      materials?: { id: string; url: string }[];
+      savedImages?: {
+        id: string;
+        url: string;
+        label: string;
+        createdAt: number;
+        prompt?: string;
+      }[];
+      sourceAlbums?: {
+        id: string;
+        url: string;
+        label: string;
+        createdAt: number;
+        results?: {
+          id: string;
+          url: string;
+          label: string;
+          createdAt: number;
+          prompt?: string;
+        }[];
+      }[];
+    };
+    model: { meshyModelUrl?: string | null };
+  },
+  projectId: string,
+  projectName: string,
+) {
+  const store = useAssetStore.getState();
+  if (!store.loaded) await store.load();
+
+  type Cand = {
+    id?: string;
+    url: string;
+    label: string;
+    createdAt?: number;
+    prompt?: string;
+  };
+  const candidates: Cand[] = [];
+  const seen = new Set(
+    store.items.filter((x) => x.kind === 'image').map((x) => x.url),
+  );
+
+  const push = (c: Cand) => {
+    if (!isAssetableUrl(c.url)) return;
+    if (seen.has(c.url)) return;
+    seen.add(c.url);
+    candidates.push(c);
+  };
+
+  const img = bag.image;
+  for (const s of img.savedImages || []) {
+    push({
+      id: s.id,
+      url: s.url,
+      label: s.label || '结果',
+      createdAt: s.createdAt,
+      prompt: s.prompt,
+    });
+  }
+  for (const a of img.sourceAlbums || []) {
+    push({
+      id: a.id,
+      url: a.url,
+      label: a.label || '原图',
+      createdAt: a.createdAt,
+    });
+    for (const r of a.results || []) {
+      push({
+        id: r.id,
+        url: r.url,
+        label: r.label || '结果',
+        createdAt: r.createdAt,
+        prompt: r.prompt,
+      });
+    }
+  }
+  push({ url: img.originalUrl || '', label: '原图' });
+  push({ url: img.currentUrl || '', label: '当前图' });
+  for (const m of img.materials || []) {
+    push({ id: m.id, url: m.url, label: '素材' });
+  }
+
+  for (const c of candidates) {
+    await store.addImageAsset({
+      ...c,
+      projectId,
+      projectName,
+    });
+  }
+
+  const modelUrl = bag.model?.meshyModelUrl;
+  if (isAssetableUrl(modelUrl)) {
+    await store.addModelAsset({
+      url: modelUrl,
+      label: `${projectName || '项目'} · 3D`,
+      projectId,
+      projectName,
+    });
+  }
 }
