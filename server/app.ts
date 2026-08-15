@@ -181,6 +181,10 @@ export function createApiApp() {
     const { handleListMyProjects } = await import('./projectHandlers');
     return handleListMyProjects(req, res);
   });
+  app.get('/api/projects/media', async (req, res) => {
+    const { handleProjectMedia } = await import('./projectHandlers');
+    return handleProjectMedia(req, res);
+  });
   app.get('/api/projects/:id', async (req, res) => {
     const { handleGetProject } = await import('./projectHandlers');
     return handleGetProject(req, res);

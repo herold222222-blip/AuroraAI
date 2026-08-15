@@ -5,6 +5,7 @@ import {
   type ProjectAssetPayload,
   type RemoteProject,
 } from '../api/projectApi';
+import { apiUrl } from '../config/api';
 import type { ProjectBag } from './projectBag';
 import { emptyImageBag, isScratchProjectId } from './projectBag';
 
@@ -226,7 +227,8 @@ export async function loadRemoteProjects(
   const out: RemoteProject[] = [];
   for (const p of res.projects || []) {
     try {
-      out.push({ ...p, bag: reviveProjectBag(p.bag) });
+      const bag = rewriteOssUrlsForClient(p.bag, token);
+      out.push({ ...p, bag: reviveProjectBag(bag) });
     } catch (err) {
       // 仍保留列表项，避免「接口有项目、界面空白」；打开时用空袋
       console.error('[projects] revive failed', p.id, p.name, err);
@@ -234,6 +236,28 @@ export async function loadRemoteProjects(
     }
   }
   return out;
+}
+
+/** 兜底：若接口仍返回 oss:key，改成可带 token 的同源读图地址 */
+function rewriteOssUrlsForClient(bag: unknown, token: string): unknown {
+  const walk = (value: unknown): unknown => {
+    if (typeof value === 'string' && value.startsWith('oss:')) {
+      const key = value.slice(4);
+      return apiUrl(
+        `/api/projects/media?key=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`,
+      );
+    }
+    if (Array.isArray(value)) return value.map(walk);
+    if (value && typeof value === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        out[k] = walk(v);
+      }
+      return out;
+    }
+    return value;
+  };
+  return walk(bag);
 }
 
 export async function deleteFormalProjectRemote(

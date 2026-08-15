@@ -1,6 +1,10 @@
 import { createHash } from 'crypto';
 import { getPool } from './db';
-import oss, { isOssConfigured } from './ossStore';
+import oss, {
+  isOssConfigured,
+  resolveObjectUrl,
+  publicObjectUrl,
+} from './ossStore';
 
 export type ProjectAssetIn = {
   id: string;
@@ -17,6 +21,11 @@ export type StoredProject = {
   version: number;
   createdAt: number;
   updatedAt: number;
+};
+
+export type ResolveUrlOptions = {
+  /** 签名失败时的同源代理（带 token，可供 <img src> 使用） */
+  mediaUrlForKey?: (key: string) => string;
 };
 
 let schemaReady = false;
@@ -139,13 +148,55 @@ function bagWithOssKeys(
   });
 }
 
-async function bagWithResolvedUrls(bag: unknown): Promise<unknown> {
+function extractBag(manifest: Record<string, unknown>): unknown {
+  const raw = manifest.bag ?? manifest;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return {};
+    }
+  }
+  return raw ?? {};
+}
+
+async function resolveOssKey(
+  key: string,
+  opts?: ResolveUrlOptions,
+): Promise<string> {
+  // 优先走同源代理：不依赖 OSS 公私读 / 签名链 / 混合内容，<img> 可直接显示
+  if (opts?.mediaUrlForKey) {
+    return opts.mediaUrlForKey(key);
+  }
+  if (isOssConfigured()) {
+    try {
+      const url = await resolveObjectUrl(key);
+      if (url && !url.startsWith('oss:')) {
+        return url.replace(/^http:\/\//i, 'https://');
+      }
+    } catch (err) {
+      console.error('[projects] resolveObjectUrl', key, err);
+    }
+  } else {
+    console.warn('[projects] OSS 未配置，无法签名资源', key);
+  }
+  try {
+    return publicObjectUrl(key);
+  } catch {
+    return `oss:${key}`;
+  }
+}
+
+async function bagWithResolvedUrls(
+  bag: unknown,
+  opts?: ResolveUrlOptions,
+): Promise<unknown> {
   const cache = new Map<string, string>();
   const walk = async (value: unknown): Promise<unknown> => {
     if (typeof value === 'string' && value.startsWith('oss:')) {
       const key = value.slice(4);
       if (!cache.has(key)) {
-        cache.set(key, await oss.resolveObjectUrl(key));
+        cache.set(key, await resolveOssKey(key, opts));
       }
       return cache.get(key);
     }
@@ -159,7 +210,8 @@ async function bagWithResolvedUrls(bag: unknown): Promise<unknown> {
     }
     return value;
   };
-  return walk(bag);
+  const resolved = await walk(bag);
+  return resolved;
 }
 
 function rowToProject(row: {
@@ -291,13 +343,15 @@ export async function getProjectManifest(projectId: string) {
   };
 }
 
-export async function getResolvedProject(projectId: string, ownerId: string) {
+export async function getResolvedProject(
+  projectId: string,
+  ownerId: string,
+  opts?: ResolveUrlOptions,
+) {
   const row = await getProjectRow(projectId);
   if (!row) return null;
   if (row.ownerId !== ownerId) return 'forbidden' as const;
-  const bag = await bagWithResolvedUrls(
-    (row.manifest as { bag?: unknown }).bag ?? {},
-  );
+  const bag = await bagWithResolvedUrls(extractBag(row.manifest), opts);
   return {
     id: row.id,
     name: row.name,
@@ -319,13 +373,14 @@ export async function listProjectsByOwner(ownerId: string) {
   return (res.rows || []).map(rowToProject);
 }
 
-export async function listResolvedProjects(ownerId: string) {
+export async function listResolvedProjects(
+  ownerId: string,
+  opts?: ResolveUrlOptions,
+) {
   const rows = await listProjectsByOwner(ownerId);
   const out = [];
   for (const row of rows) {
-    const bag = await bagWithResolvedUrls(
-      (row.manifest as { bag?: unknown }).bag ?? {},
-    );
+    const bag = await bagWithResolvedUrls(extractBag(row.manifest), opts);
     out.push({
       id: row.id,
       name: row.name,

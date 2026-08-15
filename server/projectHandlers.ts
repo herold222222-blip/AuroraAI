@@ -6,11 +6,52 @@ import {
   listResolvedProjects,
   deleteProject,
   type ProjectAssetIn,
+  type ResolveUrlOptions,
 } from './projectStore';
 import { verifyToken } from './authTokens';
+import { getObjectBuffer, isOssConfigured } from './ossStore';
 
 function authOf(req: Request) {
-  return verifyToken((req.headers.authorization || '') as string);
+  const header = (req.headers.authorization || '') as string;
+  const q = typeof req.query.t === 'string' ? req.query.t : '';
+  return verifyToken(header || q || null);
+}
+
+function rawTokenOf(req: Request): string {
+  const header = String(req.headers.authorization || '');
+  if (header.startsWith('Bearer ')) return header.slice(7).trim();
+  if (typeof req.query.t === 'string') return req.query.t.trim();
+  return '';
+}
+
+function publicOriginOf(req: Request): string {
+  const fromEnv = (
+    process.env.PUBLIC_WEB_ORIGIN ||
+    process.env.AUTH_API_ORIGIN ||
+    process.env.VITE_API_ORIGIN ||
+    ''
+  ).replace(/\/$/, '');
+  if (fromEnv) return fromEnv;
+  const proto = String(
+    req.headers['x-forwarded-proto'] || req.protocol || 'https',
+  ).split(',')[0].trim();
+  const host = String(
+    req.headers['x-forwarded-host'] || req.headers.host || '',
+  )
+    .split(',')[0]
+    .trim();
+  if (!host) return '';
+  return `${proto}://${host}`;
+}
+
+function resolveOpts(req: Request): ResolveUrlOptions {
+  const token = rawTokenOf(req);
+  const origin = publicOriginOf(req);
+  if (!token || !origin) return {};
+  return {
+    mediaUrlForKey: (key: string) =>
+      `${origin}/api/projects/media?key=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`,
+  };
 }
 
 export async function handleSaveProject(req: Request, res: Response) {
@@ -57,7 +98,7 @@ export async function handleGetProject(req: Request, res: Response) {
     if (!auth) return res.status(401).json({ error: '未认证' });
     const pid = String(req.params.id || '').trim();
     if (!pid) return res.status(400).json({ error: 'id 必需' });
-    const m = await getResolvedProject(pid, auth.sub);
+    const m = await getResolvedProject(pid, auth.sub, resolveOpts(req));
     if (m === 'forbidden') return res.status(403).json({ error: '无权查看该项目' });
     if (!m) return res.status(404).json({ error: '项目未找到' });
     res.json({ ok: true, project: m });
@@ -71,7 +112,7 @@ export async function handleListMyProjects(req: Request, res: Response) {
   try {
     const auth = authOf(req);
     if (!auth) return res.status(401).json({ error: '未认证' });
-    const projects = await listResolvedProjects(auth.sub);
+    const projects = await listResolvedProjects(auth.sub, resolveOpts(req));
     res.json({ ok: true, projects });
   } catch (e) {
     console.error('[projects] list', e);
@@ -93,5 +134,31 @@ export async function handleDeleteProject(req: Request, res: Response) {
     const message = e instanceof Error ? e.message : '删除失败';
     const status = message.startsWith('无权') ? 403 : 500;
     res.status(status).json({ error: message });
+  }
+}
+
+/** <img src> 可用的鉴权读图（query t=JWT）；仅允许读取本人 projects/{userId}/ 前缀 */
+export async function handleProjectMedia(req: Request, res: Response) {
+  try {
+    const auth = authOf(req);
+    if (!auth) return res.status(401).json({ error: '未认证' });
+    const key = String(req.query.key || '').trim().replace(/^\/+/, '');
+    if (!key || key.includes('..')) {
+      return res.status(400).json({ error: 'key 无效' });
+    }
+    const allowed = `projects/${auth.sub}/`;
+    if (!key.startsWith(allowed)) {
+      return res.status(403).json({ error: '无权访问该资源' });
+    }
+    if (!isOssConfigured()) {
+      return res.status(503).json({ error: 'OSS 未配置' });
+    }
+    const { buffer, contentType } = await getObjectBuffer(key);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.send(buffer);
+  } catch (e) {
+    console.error('[projects] media', e);
+    res.status(500).json({ error: e instanceof Error ? e.message : '读取失败' });
   }
 }

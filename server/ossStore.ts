@@ -45,6 +45,7 @@ function getClient(): OSS {
     accessKeyId: cfg.accessKeyId,
     accessKeySecret: cfg.accessKeySecret,
     bucket: cfg.bucket,
+    secure: true,
   });
   return client;
 }
@@ -78,7 +79,8 @@ export async function headObject(key: string) {
 
 export async function signedUrl(key: string, expires = 3600) {
   const c = getClient();
-  return c.signatureUrl(key, { expires });
+  // 站点是 HTTPS 时，http 签名链会被浏览器混合内容拦截 → 图片空白
+  return String(c.signatureUrl(key, { expires })).replace(/^http:\/\//i, 'https://');
 }
 
 export function publicObjectUrl(key: string): string {
@@ -97,13 +99,38 @@ export function publicObjectUrl(key: string): string {
 
 export async function resolveObjectUrl(
   key: string,
-  expires = 60 * 60 * 24 * 7,
+  expires = 60 * 60 * 12,
 ): Promise<string> {
   try {
     return await signedUrl(key, expires);
-  } catch {
+  } catch (err) {
+    console.warn('[oss] signedUrl failed, fallback public', key, err);
     return publicObjectUrl(key);
   }
+}
+
+export async function getObjectBuffer(key: string): Promise<{
+  buffer: Buffer;
+  contentType: string;
+}> {
+  const c = getClient();
+  const r = await c.get(key);
+  const content = r.content as Buffer | string;
+  const buffer = Buffer.isBuffer(content)
+    ? content
+    : Buffer.from(content || '');
+  const headerType =
+    (r.res?.headers?.['content-type'] as string | undefined) || '';
+  const contentType =
+    headerType ||
+    (key.endsWith('.png')
+      ? 'image/png'
+      : key.endsWith('.jpg') || key.endsWith('.jpeg')
+        ? 'image/jpeg'
+        : key.endsWith('.webp')
+          ? 'image/webp'
+          : 'application/octet-stream');
+  return { buffer, contentType };
 }
 
 export async function listObjects(prefix = '', maxKeys = 1000) {
@@ -130,6 +157,7 @@ export default {
   signedUrl,
   publicObjectUrl,
   resolveObjectUrl,
+  getObjectBuffer,
   listObjects,
   deletePrefix,
 };
