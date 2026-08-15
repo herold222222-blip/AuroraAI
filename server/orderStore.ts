@@ -40,6 +40,20 @@ function emptyDb(): DbShape {
   return { orders: [] };
 }
 
+function epochMs(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  if (value instanceof Date) {
+    const t = value.getTime();
+    return Number.isFinite(t) ? t : undefined;
+  }
+  const n = typeof value === 'number' ? value : Number(value);
+  if (Number.isFinite(n) && n > 0) {
+    return n < 1e12 ? Math.round(n * 1000) : n;
+  }
+  const parsed = Date.parse(String(value));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function uid(prefix = 'ord'): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -138,10 +152,10 @@ export async function findOrderByOutTradeNo(
         status: r.status,
         codeUrl: r.code_url,
         expireAt: Number(r.expire_at || 0),
-        createdAt: Number(r.created_at || 0),
-        updatedAt: Number(r.updated_at || 0),
+        createdAt: epochMs(r.created_at) || 0,
+        updatedAt: epochMs(r.updated_at) || 0,
         transactionId: r.transaction_id || undefined,
-        paidAt: r.paid_at || undefined,
+        paidAt: epochMs(r.paid_at),
         payerOpenid: r.payer_openid || undefined,
       } as PayOrder;
     } catch (e) {
@@ -177,10 +191,10 @@ export async function findActivePendingOrder(
         status: r.status,
         codeUrl: r.code_url,
         expireAt: Number(r.expire_at || 0),
-        createdAt: Number(r.created_at || 0),
-        updatedAt: Number(r.updated_at || 0),
+        createdAt: epochMs(r.created_at) || 0,
+        updatedAt: epochMs(r.updated_at) || 0,
         transactionId: r.transaction_id || undefined,
-        paidAt: r.paid_at || undefined,
+        paidAt: epochMs(r.paid_at),
         payerOpenid: r.payer_openid || undefined,
       } as PayOrder;
     } catch (e) {
@@ -343,10 +357,10 @@ export async function updatePayOrder(
         status: r.status,
         codeUrl: r.code_url,
         expireAt: Number(r.expire_at || 0),
-        createdAt: Number(r.created_at || 0),
-        updatedAt: Number(r.updated_at || 0),
+        createdAt: epochMs(r.created_at) || 0,
+        updatedAt: epochMs(r.updated_at) || 0,
         transactionId: r.transaction_id || undefined,
-        paidAt: r.paid_at || undefined,
+        paidAt: epochMs(r.paid_at),
         payerOpenid: r.payer_openid || undefined,
       } as PayOrder;
     } catch (e) {
@@ -390,10 +404,10 @@ export async function closeOpenOrdersForUser(
         status: r.status,
         codeUrl: r.code_url,
         expireAt: Number(r.expire_at || 0),
-        createdAt: Number(r.created_at || 0),
-        updatedAt: Number(r.updated_at || 0),
+        createdAt: epochMs(r.created_at) || 0,
+        updatedAt: epochMs(r.updated_at) || 0,
         transactionId: r.transaction_id || undefined,
-        paidAt: r.paid_at || undefined,
+        paidAt: epochMs(r.paid_at),
         payerOpenid: r.payer_openid || undefined,
       } as PayOrder));
     } catch (e) {
@@ -444,10 +458,10 @@ export async function listPaidOrdersByUser(
         status: r.status,
         codeUrl: r.code_url,
         expireAt: Number(r.expire_at || 0),
-        createdAt: Number(r.created_at || 0),
-        updatedAt: Number(r.updated_at || 0),
+        createdAt: epochMs(r.created_at) || 0,
+        updatedAt: epochMs(r.updated_at) || 0,
         transactionId: r.transaction_id || undefined,
-        paidAt: r.paid_at || undefined,
+        paidAt: epochMs(r.paid_at),
         payerOpenid: r.payer_openid || undefined,
       } as PayOrder));
     } catch (e) {

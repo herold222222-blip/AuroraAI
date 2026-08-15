@@ -23,6 +23,7 @@ import {
 } from '../../api/authApi';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
+import { toISOStringSafe } from '../../utils/formatDateTime';
 import { Modal } from '../common/Modal';
 import { AdminStatsPanel } from './AdminStatsPanel';
 
@@ -1396,7 +1397,7 @@ function ExtraCreditsModal({
                       {e.delta > 0 ? `+${e.delta}` : e.delta} → 余额{' '}
                       {e.extraAfter}
                     </strong>
-                    <time dateTime={new Date(e.createdAt).toISOString()}>
+                    <time dateTime={toISOStringSafe(e.createdAt)}>
                       {formatTime(e.createdAt)}
                     </time>
                   </div>

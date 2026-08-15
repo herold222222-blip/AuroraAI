@@ -13,7 +13,11 @@ import { compressDataUrl } from '../../image/padImage';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useImageStore } from '../../image/useImageStore';
-import { formatDateTime } from '../../utils/formatDateTime';
+import {
+  formatDateTime,
+  toEpochMs,
+  toISOStringSafe,
+} from '../../utils/formatDateTime';
 import { Modal } from './Modal';
 import { SmsCodeField } from './SmsCodeField';
 
@@ -326,24 +330,12 @@ function formatMoney(n: number) {
   });
 }
 
-/** paidAt / createdAt 可能是毫秒、秒或数字字符串（如 "1786709710862"）。 */
-function toEpochMs(ts: unknown): number | null {
-  if (ts == null || ts === '') return null;
-  const n = typeof ts === 'number' ? ts : Number(String(ts).trim());
-  if (!Number.isFinite(n) || n <= 0) return null;
-  // 10 位为秒，13 位为毫秒
-  const ms = n < 1e12 ? Math.round(n * 1000) : n;
-  return Number.isNaN(new Date(ms).getTime()) ? null : ms;
-}
-
 function formatWalletTime(ts: unknown) {
-  const ms = toEpochMs(ts);
-  return ms == null ? '—' : formatDateTime(ms);
+  return formatDateTime(ts) || '—';
 }
 
-function toISOStringSafe(ts: unknown): string | undefined {
-  const ms = toEpochMs(ts);
-  return ms == null ? undefined : new Date(ms).toISOString();
+function walletWhen(paidAt: unknown, createdAt: unknown) {
+  return toEpochMs(paidAt) ?? toEpochMs(createdAt);
 }
 
 const USAGE_KIND_LABEL: Record<UsageKind, string> = {
@@ -522,8 +514,8 @@ export function WalletModal({ onClose }: { onClose: () => void }) {
                   <li key={r.id} className="wallet-row">
                     <div className="wallet-row-top">
                       <strong>¥{formatMoney(Number(r.amount) || 0)}</strong>
-                      <time dateTime={toISOStringSafe(r.paidAt || r.createdAt)}>
-                        {formatWalletTime(r.paidAt || r.createdAt)}
+                      <time dateTime={toISOStringSafe(walletWhen(r.paidAt, r.createdAt))}>
+                        {formatWalletTime(walletWhen(r.paidAt, r.createdAt))}
                       </time>
                     </div>
                     <p className="wallet-msg wallet-pay-meta">

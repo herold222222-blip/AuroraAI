@@ -276,14 +276,8 @@ export async function editImage(req: EditRequest): Promise<{
       }),
     );
   } catch (err) {
-    // Log detailed error for diagnostics
-    try {
-      console.error('[geminiService] generateContent error:', err && (err.stack || err));
-      if (err && (err as any).name) console.error('[geminiService] error name:', (err as any).name);
-      if (err && (err as any).message) console.error('[geminiService] error message:', (err as any).message);
-    } catch (logErr) {
-      console.error('[geminiService] failed to log error', logErr);
-    }
+    const logged = err instanceof Error ? err.stack || err.message : err;
+    console.error('[geminiService] generateContent error:', logged);
     throw formatGeminiError(err);
   }
 
