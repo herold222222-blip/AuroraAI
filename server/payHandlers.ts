@@ -642,8 +642,49 @@ export async function handleDonateOrderStatus(
   const no = decodeURIComponent(outTradeNo || '').trim();
   if (!no) return fail('订单号无效');
 
-  const order = await findOrderByOutTradeNo(no);
-  if (!order) return fail('订单不存在', 404);
+  let order = await findOrderByOutTradeNo(no);
+  // 库/文件都丢了时：凭商户单号查微信，SUCCESS 则按 attach=userId 重建并履约
+  if (!order) {
+    try {
+      const q = await queryByOutTradeNo(no);
+      console.log('[pay] status recover query', no, q.tradeState, q.attach || '');
+      if (q.tradeState !== 'SUCCESS') {
+        return fail('订单不存在', 404);
+      }
+      const attachUser = String(q.attach || '').trim();
+      if (attachUser && attachUser !== payload.sub) {
+        return fail('无权查看该订单', 403);
+      }
+      if (!attachUser) {
+        // 旧单无 attach：仅允许当前登录用户主动认领已付款单
+        console.warn('[pay] status recover without attach', no, payload.sub);
+      }
+      const amountFen = q.amountTotal && q.amountTotal > 0 ? q.amountTotal : 0;
+      if (amountFen < 1) return fail('订单金额无效', 400);
+      order = await createPayOrder({
+        userId: payload.sub,
+        amountFen,
+        amountYuan: Math.round(amountFen) / 100,
+        message: '',
+        codeUrl: '',
+        expireAt: Date.now() + 60_000,
+        outTradeNo: no,
+      });
+      const paid = await fulfillPaidOrder(order, {
+        transactionId: q.transactionId || '',
+        amountTotal: amountFen,
+        payerOpenid: q.payerOpenid,
+      });
+      const u = await findById(payload.sub);
+      return ok({
+        order: publicOrder(paid),
+        user: u ? toPublicUser(u) : null,
+      });
+    } catch (err) {
+      console.error('[pay] status recover failed', no, err);
+      return fail('订单不存在', 404);
+    }
+  }
   if (order.userId !== payload.sub) return fail('无权查看该订单', 403);
 
   try {

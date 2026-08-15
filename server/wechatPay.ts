@@ -201,6 +201,8 @@ export type WxQueryResult = {
   amountTotal?: number;
   successTime?: string;
   payerOpenid?: string;
+  /** 下单时写入的 attach（本系统存 userId） */
+  attach?: string;
 };
 
 export async function queryByOutTradeNo(
@@ -215,6 +217,7 @@ export async function queryByOutTradeNo(
     amount?: { total?: number };
     success_time?: string;
     payer?: { openid?: string };
+    attach?: string;
   }>(cfg, 'GET', path);
   return {
     tradeState: (data.trade_state || 'NOTPAY') as WxTradeState,
@@ -222,6 +225,7 @@ export async function queryByOutTradeNo(
     amountTotal: data.amount?.total,
     successTime: data.success_time,
     payerOpenid: data.payer?.openid,
+    attach: data.attach || undefined,
   };
 }
 
