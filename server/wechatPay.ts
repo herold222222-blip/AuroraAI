@@ -115,7 +115,10 @@ async function wxRequest<T>(
     method,
     headers: {
       Accept: 'application/json',
+      // 微信部分接口会校验该头；Node/代理可能注入不支持的值导致「传入了不支持的Accept-Language」
+      'Accept-Language': 'zh-CN',
       'Content-Type': 'application/json',
+      'User-Agent': 'AuroraAI-WechatPay/1.0',
       Authorization: authorization(cfg, method, urlPath, body),
     },
     body: method === 'GET' ? undefined : body,

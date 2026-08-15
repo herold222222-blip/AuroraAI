@@ -46,6 +46,8 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollDeadlineRef = useRef<number>(0);
+  /** 本轮二维码开始等待支付的时间；只认这之后才付清的单，避免旧单误报成功 */
+  const pollStartedAtRef = useRef<number>(0);
   const orderRef = useRef<DonatePayOrder | null>(null);
   const messageRef = useRef(message);
   const createSeqRef = useRef(0);
@@ -116,6 +118,7 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
     const interval = next.pollIntervalMs || 2500;
     const maxMs = next.pollMaxMs || 5 * 60 * 1000;
     pollDeadlineRef.current = Date.now() + maxMs;
+    pollStartedAtRef.current = Date.now();
     setPollHint('请使用微信扫码支付，支付完成后将自动确认');
 
     pollTimerRef.current = setInterval(() => {
@@ -141,12 +144,26 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
             token,
             current.outTradeNo,
           );
+          // 只处理当前正在展示的这一单
+          if (latest.outTradeNo !== current.outTradeNo) return;
           setOrder(latest);
           if (latest.status === 'user_paying') {
             setPollHint('已扫码，等待付款确认…');
           } else if (latest.status === 'pending') {
             setPollHint('请使用微信扫码支付，支付完成后将自动确认');
           } else if (latest.status === 'paid') {
+            const paidAt = Number(latest.paidAt || 0);
+            // 入账时间早于本轮出码：是历史单，刷新新码，不要弹「支付成功」
+            if (paidAt > 0 && paidAt < pollStartedAtRef.current - 3000) {
+              stopPolling();
+              setPollHint('检测到历史订单已入账，正在刷新收款码…');
+              await ensureOrder({
+                yuan: latest.amount,
+                msg: messageRef.current,
+                forceRefresh: true,
+              });
+              return;
+            }
             stopPolling();
             if (user) setUser(user);
             const msg = String(latest.message || '').trim();
@@ -186,23 +203,20 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
     setCreateError('');
     stopPolling();
     try {
-      const { order: next, user } = await apiCreateDonateOrder(
+      const { order: next } = await apiCreateDonateOrder(
         token,
         opts.yuan,
         opts.msg,
         opts.forceRefresh,
       );
       if (seq !== createSeqRef.current) return;
-      if (user) setUser(user);
+      // 下单接口只应返回待支付单；若仍带回 paid，当作异常并强制新开一单
       if (next.status === 'paid') {
-        const msg = String(next.message || '').trim();
-        pushToast(
-          `感谢赞赏 ¥${formatAmount(next.amount)}${
-            msg ? '，留言已收到' : ''
-          }`,
-          'success',
-        );
-        onClose();
+        if (!opts.forceRefresh) {
+          await ensureOrder({ ...opts, forceRefresh: true });
+        } else {
+          setCreateError('无法创建新的收款码，请稍后重试');
+        }
         return;
       }
       setOrder(next);
@@ -335,11 +349,23 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
       return;
     }
     const no = orderRef.current.outTradeNo;
+    const waitingSince = pollStartedAtRef.current || Date.now();
     setPollHint('正在向微信确认支付结果…');
     void apiDonateOrderStatus(token, no)
       .then(({ order: latest, user }) => {
+        if (latest.outTradeNo !== no) return;
         setOrder(latest);
         if (latest.status === 'paid') {
+          const paidAt = Number(latest.paidAt || 0);
+          if (paidAt > 0 && paidAt < waitingSince - 3000) {
+            setPollHint('检测到历史订单已入账，正在刷新收款码…');
+            void ensureOrder({
+              yuan: latest.amount,
+              msg: messageRef.current,
+              forceRefresh: true,
+            });
+            return;
+          }
           stopPolling();
           if (user) setUser(user);
           const msg = String(latest.message || '').trim();

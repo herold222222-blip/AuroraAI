@@ -403,16 +403,13 @@ export async function handleCreateDonateOrder(
       const existing = await findActivePendingOrder(payload.sub);
       if (existing) {
         const synced = await syncOrderWithWechat(existing);
+        // 历史单已付清：只入账，不把「已支付」当作本次下单结果（否则前端会未扫码就成功）
         if (synced.status === 'paid') {
-          const user = await findById(payload.sub);
-          return ok({
-            order: publicOrder(synced),
-            reused: true,
-            user: user ? toPublicUser(user) : null,
-          });
-        }
-        // 仅同金额待支付单可复用；换金额则继续往下重新下单
-        if (
+          console.log(
+            '[pay] create: prior pending already paid, issue new QR',
+            synced.outTradeNo,
+          );
+        } else if (
           (synced.status === 'pending' || synced.status === 'user_paying') &&
           synced.amountFen === amountFen
         ) {
@@ -431,15 +428,10 @@ export async function handleCreateDonateOrder(
     if (existingOpen) {
       const syncedOld = await syncOrderWithWechat(existingOpen);
       if (syncedOld.status === 'paid') {
-        // 旧码其实已付清；若本次只要刷新且同额，直接返回已支付单
-        if (!refresh || syncedOld.amountFen === amountFen) {
-          const user = await findById(payload.sub);
-          return ok({
-            order: publicOrder(syncedOld),
-            reused: true,
-            user: user ? toPublicUser(user) : null,
-          });
-        }
+        console.log(
+          '[pay] create: open order already paid before close',
+          syncedOld.outTradeNo,
+        );
       }
     }
 
@@ -482,6 +474,7 @@ export async function handleCreateDonateOrder(
       outTradeNo,
     });
 
+    // 创建接口只返回待支付单；支付成功只由回调 / 状态轮询确认
     return ok({ order: publicOrder(order), reused: false }, 201);
   } catch (err) {
     return fail(err instanceof Error ? err.message : String(err));
