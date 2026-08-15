@@ -334,6 +334,8 @@ export type WxNotifyResource = {
   amountTotal: number;
   successTime?: string;
   payerOpenid?: string;
+  /** 下单时 attach=userId，回调可用来找回丢单 */
+  attach?: string;
 };
 
 export function decryptNotifyResource(body: {
@@ -363,6 +365,7 @@ export function decryptNotifyResource(body: {
     amount?: { total?: number };
     success_time?: string;
     payer?: { openid?: string };
+    attach?: string;
   };
   if (!data.out_trade_no || !data.transaction_id) {
     throw new Error('回调订单信息不完整');
@@ -374,5 +377,6 @@ export function decryptNotifyResource(body: {
     amountTotal: Number(data.amount?.total) || 0,
     successTime: data.success_time,
     payerOpenid: data.payer?.openid,
+    attach: data.attach || undefined,
   };
 }

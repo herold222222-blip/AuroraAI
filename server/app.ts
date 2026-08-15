@@ -114,7 +114,10 @@ export function createApiApp() {
     if (r.contentType) res.setHeader('Content-Type', r.contentType);
     res.status(r.status).send(r.rawBody ?? JSON.stringify(r.body));
   };
-  const notifyRaw = express.raw({ type: '*/*', limit: '2mb' });
+  const notifyRaw = express.raw({
+    type: () => true,
+    limit: '2mb',
+  });
   app.post('/api/pay/wechat/notify', notifyRaw, wechatNotify);
   app.post('/pay/wechat/notify', notifyRaw, wechatNotify);
 

@@ -223,23 +223,21 @@ async function fulfillPaidOrder(
       if (!row) {
         // 历史：下单只写了本地文件，履约时补插入库
         await client.query(
-          `INSERT INTO orders (id, out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at, transaction_id, paid_at, payer_openid)
-           VALUES ($1,$2,$3,$4,$5,'paid',$6,$7,$8,$9,$10,$11,$12,$13)
+          `INSERT INTO orders (out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at, transaction_id, paid_at, payer_openid)
+           VALUES ($1,$2,$3,$4,'paid',$5,$6,$7,$8,$9,$10,$11,$12)
            ON CONFLICT (out_trade_no) DO UPDATE SET
              status='paid',
              transaction_id=EXCLUDED.transaction_id,
              paid_at=EXCLUDED.paid_at,
              payer_openid=EXCLUDED.payer_openid,
-             updated_at=EXCLUDED.updated_at
-           RETURNING *`,
+             updated_at=EXCLUDED.updated_at`,
           [
-            order.id,
             order.outTradeNo,
             order.userId,
             order.amountFen,
             order.amountYuan,
             order.message || null,
-            order.codeUrl,
+            order.codeUrl || null,
             order.expireAt,
             order.createdAt,
             paidAt,
@@ -713,15 +711,32 @@ export async function handleWechatPayNotify(
       outTradeNo: resource.outTradeNo,
       tradeState: resource.tradeState,
       transactionId: resource.transactionId,
+      attach: resource.attach || '',
     });
     if (resource.tradeState && resource.tradeState !== 'SUCCESS') {
       return okWx();
     }
 
-    const order = await findOrderByOutTradeNo(resource.outTradeNo);
+    let order = await findOrderByOutTradeNo(resource.outTradeNo);
     if (!order) {
-      console.error('[pay] notify unknown order', resource.outTradeNo);
-      return failWx('订单不存在');
+      // 丢单恢复：下单时 attach=userId；本地/库均无记录时凭回调重建
+      const userId = String(resource.attach || '').trim();
+      if (!userId || resource.amountTotal < 1) {
+        console.error('[pay] notify unknown order', resource.outTradeNo);
+        return failWx('订单不存在');
+      }
+      console.warn('[pay] notify recover missing order', resource.outTradeNo, userId);
+      const amountFen = resource.amountTotal;
+      const amountYuan = Math.round(amountFen) / 100;
+      order = await createPayOrder({
+        userId,
+        amountFen,
+        amountYuan,
+        message: '',
+        codeUrl: '',
+        expireAt: Date.now() + 60_000,
+        outTradeNo: resource.outTradeNo,
+      });
     }
 
     await fulfillPaidOrder(order, {

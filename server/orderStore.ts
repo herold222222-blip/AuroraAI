@@ -136,35 +136,42 @@ function isOpenStatus(s: PayOrderStatus): boolean {
 export async function findOrderByOutTradeNo(
   outTradeNo: string,
 ): Promise<PayOrder | null> {
+  const no = String(outTradeNo || '').trim();
+  if (!no) return null;
+
   if (process.env.DATABASE_URL) {
     try {
       const pool = getPool();
-      const res = await pool.query('SELECT * FROM orders WHERE out_trade_no=$1', [outTradeNo]);
-      if (!res.rows || res.rows.length === 0) return null;
-      const r = res.rows[0];
-      return {
-        id: r.id,
-        outTradeNo: r.out_trade_no,
-        userId: r.user_id,
-        amountFen: Number(r.amount_fen),
-        amountYuan: Number(r.amount_yuan),
-        message: r.message,
-        status: r.status,
-        codeUrl: r.code_url,
-        expireAt: Number(r.expire_at || 0),
-        createdAt: epochMs(r.created_at) || 0,
-        updatedAt: epochMs(r.updated_at) || 0,
-        transactionId: r.transaction_id || undefined,
-        paidAt: epochMs(r.paid_at),
-        payerOpenid: r.payer_openid || undefined,
-      } as PayOrder;
+      const res = await pool.query(
+        'SELECT * FROM orders WHERE out_trade_no=$1',
+        [no],
+      );
+      if (res.rows?.length) {
+        const r = res.rows[0];
+        return {
+          id: r.id,
+          outTradeNo: r.out_trade_no,
+          userId: r.user_id,
+          amountFen: Number(r.amount_fen),
+          amountYuan: Number(r.amount_yuan),
+          message: r.message,
+          status: r.status,
+          codeUrl: r.code_url,
+          expireAt: Number(r.expire_at || 0),
+          createdAt: epochMs(r.created_at) || 0,
+          updatedAt: epochMs(r.updated_at) || 0,
+          transactionId: r.transaction_id || undefined,
+          paidAt: epochMs(r.paid_at),
+          payerOpenid: r.payer_openid || undefined,
+        } as PayOrder;
+      }
+      // 库里没有时继续查本地镜像（旧逻辑曾只写文件）
     } catch (e) {
       console.error('pg findOrderByOutTradeNo', e);
-      // fallback
     }
   }
   const db = await loadDb();
-  return db.orders.find((o) => o.outTradeNo === outTradeNo) || null;
+  return db.orders.find((o) => o.outTradeNo === no) || null;
 }
 
 /** 用户当前未过期的待支付订单（防重复下单） */
@@ -240,23 +247,26 @@ export async function createPayOrder(input: {
     updatedAt: now,
   };
 
-  // 必须同时写入 Postgres：履约/钱包都读库；仅写本地文件会导致「付了多笔库里只有一笔」
+  // 写入 Postgres（id 交给数据库默认，避免 UUID/TEXT 类型与 ord_xxx 冲突）
   if (process.env.DATABASE_URL) {
     try {
       const pool = getPool();
-      await pool.query(
-        `INSERT INTO orders (id, out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      const res = await pool.query(
+        `INSERT INTO orders (out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
          ON CONFLICT (out_trade_no) DO UPDATE SET
            code_url=EXCLUDED.code_url,
            expire_at=EXCLUDED.expire_at,
            message=EXCLUDED.message,
            amount_fen=EXCLUDED.amount_fen,
            amount_yuan=EXCLUDED.amount_yuan,
-           status=EXCLUDED.status,
-           updated_at=EXCLUDED.updated_at`,
+           status=CASE
+             WHEN orders.status = 'paid' THEN orders.status
+             ELSE EXCLUDED.status
+           END,
+           updated_at=EXCLUDED.updated_at
+         RETURNING id`,
         [
-          order.id,
           order.outTradeNo,
           order.userId,
           order.amountFen,
@@ -269,15 +279,23 @@ export async function createPayOrder(input: {
           order.updatedAt,
         ],
       );
+      if (res.rows?.[0]?.id) {
+        order.id = String(res.rows[0].id);
+      }
     } catch (e) {
-      console.error('[pay] createPayOrder pg insert', e);
-      throw e instanceof Error ? e : new Error(String(e));
+      // 不阻断下单：本地文件仍可支撑回调/轮询；履约时再 upsert 入库
+      console.error(
+        '[pay] createPayOrder pg insert failed（将仅写本地订单镜像）',
+        e,
+      );
     }
   }
 
   try {
     const db = await loadDb();
-    db.orders.unshift(order);
+    const idx = db.orders.findIndex((o) => o.outTradeNo === order.outTradeNo);
+    if (idx >= 0) db.orders[idx] = order;
+    else db.orders.unshift(order);
     if (db.orders.length > 2000) db.orders.length = 2000;
     await saveDb(db);
   } catch (e) {
