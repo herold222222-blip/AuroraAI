@@ -238,14 +238,24 @@ export async function loadRemoteProjects(
   return out;
 }
 
-/** 兜底：若接口仍返回 oss:key，改成可带 token 的同源读图地址 */
+/** 兜底：oss: → 同源读图；http OSS → https（避免 HTTPS 站点混合内容拦截） */
 function rewriteOssUrlsForClient(bag: unknown, token: string): unknown {
   const walk = (value: unknown): unknown => {
-    if (typeof value === 'string' && value.startsWith('oss:')) {
-      const key = value.slice(4);
-      return apiUrl(
-        `/api/projects/media?key=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`,
-      );
+    if (typeof value === 'string') {
+      if (value.startsWith('oss:')) {
+        const key = value.slice(4);
+        return apiUrl(
+          `/api/projects/media?key=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`,
+        );
+      }
+      // 签名链常返回 http://bucket.oss-*.aliyuncs.com/...，在 https 页面会被浏览器直接拦截
+      if (
+        value.startsWith('http://') &&
+        /(\.aliyuncs\.com|\.aliyun\.com)\//i.test(value)
+      ) {
+        return `https://${value.slice('http://'.length)}`;
+      }
+      return value;
     }
     if (Array.isArray(value)) return value.map(walk);
     if (value && typeof value === 'object') {

@@ -192,13 +192,23 @@ async function bagWithResolvedUrls(
   opts?: ResolveUrlOptions,
 ): Promise<unknown> {
   const cache = new Map<string, string>();
+  const forceHttps = (url: string) =>
+    url.replace(/^http:\/\//i, 'https://');
   const walk = async (value: unknown): Promise<unknown> => {
     if (typeof value === 'string' && value.startsWith('oss:')) {
       const key = value.slice(4);
       if (!cache.has(key)) {
-        cache.set(key, await resolveOssKey(key, opts));
+        cache.set(key, forceHttps(await resolveOssKey(key, opts)));
       }
       return cache.get(key);
+    }
+    // 库里若已存了 http 签名链，同样升 https
+    if (
+      typeof value === 'string' &&
+      value.startsWith('http://') &&
+      /(\.aliyuncs\.com|\.aliyun\.com)\//i.test(value)
+    ) {
+      return forceHttps(value);
     }
     if (Array.isArray(value)) return Promise.all(value.map(walk));
     if (value && typeof value === 'object') {
@@ -210,8 +220,7 @@ async function bagWithResolvedUrls(
     }
     return value;
   };
-  const resolved = await walk(bag);
-  return resolved;
+  return walk(bag);
 }
 
 function rowToProject(row: {

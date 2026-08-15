@@ -34,14 +34,21 @@ function publicOriginOf(req: Request): string {
   if (fromEnv) return fromEnv;
   const proto = String(
     req.headers['x-forwarded-proto'] || req.protocol || 'https',
-  ).split(',')[0].trim();
+  )
+    .split(',')[0]
+    .trim();
   const host = String(
     req.headers['x-forwarded-host'] || req.headers.host || '',
   )
     .split(',')[0]
     .trim();
   if (!host) return '';
-  return `${proto}://${host}`;
+  // 本机 curl 127.0.0.1 时不要生成 127.0.0.1 的媒体地址给浏览器用
+  if (/^(127\.0\.0\.1|localhost)(:\d+)?$/i.test(host)) {
+    return 'https://www.gnoverse.cn';
+  }
+  const safeProto = proto === 'http' && !/^(127\.|localhost)/i.test(host) ? 'https' : proto;
+  return `${safeProto}://${host}`;
 }
 
 function resolveOpts(req: Request): ResolveUrlOptions {
