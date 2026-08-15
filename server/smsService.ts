@@ -19,14 +19,22 @@ interface CodeEntry {
   attempts: number;
 }
 
-let redis: Redis | null = null;
-if (process.env.REDIS_URL) {
+let redis: Redis | null | undefined;
+
+/** 延迟连接，避免 vite.config 误加载 server 时把 Redis 挂住导致 `pnpm build` 不退出 */
+function getRedis(): Redis | null {
+  if (redis !== undefined) return redis;
+  const url = (process.env.REDIS_URL || '').trim();
+  if (!url) {
+    redis = null;
+    return redis;
+  }
   try {
-    redis = new Redis(process.env.REDIS_URL);
-  } catch (e) {
-    // ignore and fallback to memory
+    redis = new Redis(url);
+  } catch {
     redis = null;
   }
+  return redis;
 }
 
 const codes = new Map<string, CodeEntry>();
@@ -139,9 +147,10 @@ export async function sendSmsCode(
   const now = Date.now();
 
   // Check cooldown (Redis preferred)
-  if (redis) {
+  const r = getRedis();
+  if (r) {
     try {
-      const raw = await redis.get(k);
+      const raw = await r.get(k);
       if (raw) {
         const existing = JSON.parse(raw) as CodeEntry;
         if (now - existing.sentAt < COOLDOWN_MS) {
@@ -188,9 +197,9 @@ export async function sendSmsCode(
   }
 
   // Persist entry (Redis preferred)
-  if (redis) {
+  if (r) {
     try {
-      await redis.set(k, JSON.stringify(entry), 'PX', CODE_TTL_MS);
+      await r.set(k, JSON.stringify(entry), 'PX', CODE_TTL_MS);
     } catch (e) {
       // fallback to in-memory
       codes.set(k, entry);
@@ -227,34 +236,35 @@ export async function consumeSmsCode(
 
   const k = key(phone, purpose);
   // Redis-backed flow
-  if (redis) {
+  const r = getRedis();
+  if (r) {
     // best-effort atomic-like handling via GET/SET
     try {
-      const raw = await redis.get(k);
+      const raw = await r.get(k);
       if (!raw) return { ok: false, error: '请先获取短信验证码' };
       const entry = JSON.parse(raw) as CodeEntry;
       const now = Date.now();
       if (now > entry.expiresAt) {
-        await redis.del(k);
+        await r.del(k);
         return { ok: false, error: '验证码已过期，请重新获取' };
       }
       if (entry.attempts >= MAX_ATTEMPTS) {
-        await redis.del(k);
+        await r.del(k);
         return { ok: false, error: '验证码错误次数过多，请重新获取' };
       }
       if (entry.code !== code) {
         entry.attempts = (entry.attempts || 0) + 1;
         // update with remaining TTL
-        const ttl = await redis.pttl(k);
+        const ttl = await r.pttl(k);
         if (ttl > 0) {
-          await redis.set(k, JSON.stringify(entry), 'PX', ttl);
+          await r.set(k, JSON.stringify(entry), 'PX', ttl);
         } else {
-          await redis.del(k);
+          await r.del(k);
         }
         return { ok: false, error: '短信验证码不正确' };
       }
       // correct code: delete key and return success
-      await redis.del(k);
+      await r.del(k);
       return { ok: true };
     } catch (e) {
       // fallback to memory

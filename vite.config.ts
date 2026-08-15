@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite';
 import type { IncomingMessage, ServerResponse } from 'http';
 import react from '@vitejs/plugin-react';
-import { createApiApp } from './server/app';
 
 process.env.NODE_USE_ENV_PROXY ??= '1';
 
@@ -9,7 +8,9 @@ process.env.NODE_USE_ENV_PROXY ??= '1';
 function auroraApiPlugin(): Plugin {
   return {
     name: 'aurora-api',
-    configureServer(server) {
+    async configureServer(server) {
+      // 动态导入：避免 `vite build` 加载 Express/Redis 导致进程挂住不退出
+      const { createApiApp } = await import('./server/app');
       const api = createApiApp();
       server.middlewares.use(api);
     },
@@ -23,13 +24,13 @@ function auroraApiPlugin(): Plugin {
 function auroraPayLocalPlugin(): Plugin {
   return {
     name: 'aurora-pay-local',
-    configureServer(server) {
+    async configureServer(server) {
+      const { createApiApp } = await import('./server/app');
       const api = createApiApp();
       server.middlewares.use(
         (req: IncomingMessage, res: ServerResponse, next: () => void) => {
           const url = req.url || '';
           if (url === '/api/pay' || url.startsWith('/api/pay/')) {
-            // Connect 中间件与 Express Request 类型不完全一致
             return (api as unknown as (
               req: IncomingMessage,
               res: ServerResponse,

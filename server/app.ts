@@ -38,8 +38,6 @@ import {
 import { ensureSeedAdmin, QuotaExceededError } from './userStore';
 import { loadServerEnv } from './loadEnv';
 
-loadServerEnv();
-
 function reqHeaders(req: express.Request) {
   const headers = {
     ...(req.headers as Record<string, string | string[] | undefined>),
@@ -91,6 +89,7 @@ function restoreStrippedApiPrefix(
 }
 
 export function createApiApp() {
+  loadServerEnv();
   const app = express();
   app.use(cors());
   app.use(restoreStrippedApiPrefix);
