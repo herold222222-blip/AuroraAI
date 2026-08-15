@@ -198,7 +198,10 @@ async function writeBlobDb(db: DbShape): Promise<boolean> {
   }
 }
 
+import storage from './storage';
+
 async function pgLoadDb(): Promise<DbShape | null> {
+  storage.ensureDatabaseAvailable();
   try {
     const pool = getPool();
     const res = await pool.query('SELECT * FROM users');
@@ -241,6 +244,7 @@ async function pgLoadDb(): Promise<DbShape | null> {
 
 async function pgSaveDb(db: DbShape): Promise<boolean> {
   try {
+    storage.ensureDatabaseAvailable();
     const pool = getPool();
     for (const u of db.users) {
       await pool.query(
@@ -289,10 +293,18 @@ async function loadDb(): Promise<DbShape> {
   if (process.env.DATABASE_URL) {
     const pg = await pgLoadDb();
     if (pg) return pg;
+  } else {
+    // If remote-only mode is enabled, fail early rather than falling back to file
+    if (storage.isForceRemote()) {
+      throw new Error('DATABASE_URL not configured but FORCE_USE_REMOTE_STORAGE=true');
+    }
   }
   if (process.env.NETLIFY === 'true' || process.env.NETLIFY_BLOBS) {
     const blob = await readBlobDb();
     if (blob) return blob;
+  }
+  if (storage.isForceRemote()) {
+    throw new Error('No remote users store available but FORCE_USE_REMOTE_STORAGE=true');
   }
   return readFileDb();
 }
@@ -302,9 +314,18 @@ async function saveDb(db: DbShape): Promise<void> {
   if (process.env.DATABASE_URL) {
     const ok = await pgSaveDb(db);
     if (ok) return;
+  } else {
+    if (storage.isForceRemote()) {
+      throw new Error('DATABASE_URL not configured but FORCE_USE_REMOTE_STORAGE=true');
+    }
   }
   const usedBlob = await writeBlobDb(db);
-  if (!usedBlob) await writeFileDb(db);
+  if (!usedBlob) {
+    if (storage.isForceRemote()) {
+      throw new Error('Failed to write blob store and FORCE_USE_REMOTE_STORAGE=true');
+    }
+    await writeFileDb(db);
+  }
 }
 
 function rollUsageDay(user: StoredUser): StoredUser {

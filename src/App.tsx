@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppStore } from './store/useAppStore';
+import { isScratchProjectId } from './store/projectBag';
 import { HomePage } from './components/pages/HomePage';
 import { UploadPage } from './components/pages/UploadPage';
 import { AnalysisTransition } from './components/pages/AnalysisTransition';
@@ -58,8 +59,30 @@ export default function App() {
   const refreshMe = useAuthStore((s) => s.refreshMe);
 
   useEffect(() => {
-    void refreshMe();
+    void (async () => {
+      await refreshMe();
+      await useAppStore.getState().hydrateFromRemote();
+    })();
   }, [refreshMe]);
+
+  useEffect(() => {
+    const persist = () => {
+      const s = useAppStore.getState();
+      s.saveActiveProjectBag();
+      if (!isScratchProjectId(s.activeProjectId)) {
+        void s.saveCurrentProjectToCloud({ silent: true });
+      }
+    };
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') persist();
+    };
+    window.addEventListener('pagehide', persist);
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.removeEventListener('pagehide', persist);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

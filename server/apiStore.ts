@@ -191,17 +191,27 @@ async function writeBlobDb(db: DbShape): Promise<boolean> {
   }
 }
 
+import storage from './storage';
+
 async function loadDb(): Promise<DbShape> {
   if (process.env.NETLIFY === 'true' || process.env.NETLIFY_BLOBS) {
     const blob = await readBlobDb();
     if (blob) return blob;
+  }
+  if (storage.isForceRemote()) {
+    throw new Error('No remote api store available but FORCE_USE_REMOTE_STORAGE=true');
   }
   return readFileDb();
 }
 
 async function saveDb(db: DbShape): Promise<void> {
   const usedBlob = await writeBlobDb(db);
-  if (!usedBlob) await writeFileDb(db);
+  if (!usedBlob) {
+    if (storage.isForceRemote()) {
+      throw new Error('Failed to write blob store and FORCE_USE_REMOTE_STORAGE=true');
+    }
+    await writeFileDb(db);
+  }
 }
 
 function seedPresets(db: DbShape): boolean {

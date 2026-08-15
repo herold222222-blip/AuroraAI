@@ -36,7 +36,7 @@ pnpm install
 # 密钥：复制 .env.example → .env.local 并填写（勿提交）
 cp .env.example .env.local
 
-pnpm dev         # 开发：/api 代理到 .env.development 中的 VITE_API_ORIGIN
+pnpm dev         # 开发：/api 由本机 Express 处理（读 .env.local）
 pnpm build       # 生产构建：请求拼到 .env.production 的 VITE_API_ORIGIN
 pnpm preview     # 预览生产构建
 ```
@@ -45,10 +45,10 @@ pnpm preview     # 预览生产构建
 
 | 文件 | 作用 |
 |------|------|
-| `.env.development` | 本地开发域名 + `VITE_DEV_PROXY=true`（代理解决跨域） |
+| `.env.development` | 本地开发；默认 `VITE_DEV_PROXY=false`（本机 API） |
 | `.env.production` | 打包后 API 域名 |
 
-若要用本机 Express API，在 `.env.development.local` 设 `VITE_DEV_PROXY=false`，再跑 `pnpm dev:all`。
+若要把 `/api` 代理到线上，在 `.env.development.local` 设 `VITE_DEV_PROXY=true`。
 
 ## 业务主流程（完整闭环）
 

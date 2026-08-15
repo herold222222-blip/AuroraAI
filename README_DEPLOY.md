@@ -10,6 +10,7 @@
   - Redis：`REDIS_URL`（示例：redis://127.0.0.1:6379）
   - OSS：`OSS_BUCKET`、`OSS_ACCESS_KEY_ID`、`OSS_ACCESS_KEY_SECRET`、`OSS_REGION`、`OSS_ENDPOINT`
   - 应用关键：`AUTH_JWT_SECRET`、微信支付/第三方 API Key（如需要）
+    - 短信（开发/测试）：`ALIYUN_SMS_ACCESS_KEY_ID`、`ALIYUN_SMS_ACCESS_KEY_SECRET`、`ALIYUN_SMS_SIGN_NAME`、`ALIYUN_SMS_TEMPLATE_CODE`。若在本地没有阿里云账号，可在 `.env` 中临时设置 `ALLOW_SMS_DEV=true`（仅用于本地开发/测试，生产环境请勿开启）。
 
 二、把仓库同步到服务器（手动）
 - 通过 git clone / scp / rsync 将项目放到目标路径，例如 `/opt/aurora`。
@@ -113,6 +114,16 @@ sudo journalctl -u aurora-api -f
 
 注意：为安全起见，`.env` 不应加入 git。若在 CI/CD 中注入环境变量，请使用平台的 Secret 管理功能。
 
+-- 强制使用远程存储（谨慎）
+
+如果你希望在部署时**强制**所有服务使用远程存储（Postgres / Netlify blobs / OSS）并在配置缺失时失败，设置：
+
+```bash
+export FORCE_USE_REMOTE_STORAGE=true
+```
+
+在该模式下，应用将不再回退到本地 `.data` 文件，而是抛出错误以避免隐式降级。上线前请先确认 `DATABASE_URL`、OSS/Blobs 配置均已就绪。
+
 十、Smoke tests（运行）
 - 健康检查：
 ```bash
@@ -178,6 +189,15 @@ export OSS_REGION='oss-cn-hangzhou'
 export OSS_ENDPOINT='oss-cn-hangzhou.aliyuncs.com'
 ./scripts/deploy-prod-fast.sh
 ```
+
+本仓库新增辅助脚本可在本地使用线上环境变量直接启动后端（不会写入或覆盖服务器上的 `.env`）：
+
+```bash
+# 在本地终端确保已导出线上环境变量后运行：
+chmod +x scripts/run-local-using-prod-env.sh
+./scripts/run-local-using-prod-env.sh
+```
+
 
 -- 如果这是全新环境（无需备份），可额外执行以下步骤用于幂等性验证：
 

@@ -58,9 +58,42 @@ function reqHeaders(req: express.Request) {
 
 type ReqWithRaw = express.Request & { rawBody?: string };
 
+/** 线上 nginx `location /api` 常把前缀剥掉，Express 实际收到 /image/edit。 */
+const STRIPPED_API_PREFIXES = [
+  '/health',
+  '/auth',
+  '/image',
+  '/meshy',
+  '/pay',
+  '/projects',
+  '/assets',
+];
+
+function restoreStrippedApiPrefix(
+  req: express.Request,
+  _res: express.Response,
+  next: express.NextFunction,
+) {
+  const url = req.url || '';
+  if (url === '/api' || url.startsWith('/api/') || url.startsWith('/api?')) {
+    next();
+    return;
+  }
+  const pathOnly = url.split('?')[0];
+  if (
+    STRIPPED_API_PREFIXES.some(
+      (p) => pathOnly === p || pathOnly.startsWith(`${p}/`),
+    )
+  ) {
+    req.url = `/api${url}`;
+  }
+  next();
+}
+
 export function createApiApp() {
   const app = express();
   app.use(cors());
+  app.use(restoreStrippedApiPrefix);
 
   // 微信支付回调需要原始 body 验签，必须在 json parser 之前挂载
   app.post(
@@ -152,6 +185,10 @@ export function createApiApp() {
   app.get('/api/projects', async (req, res) => {
     const { handleListMyProjects } = await import('./projectHandlers');
     return handleListMyProjects(req, res);
+  });
+  app.delete('/api/projects/:id', async (req, res) => {
+    const { handleDeleteProject } = await import('./projectHandlers');
+    return handleDeleteProject(req, res);
   });
 
   // Assets manifest (OSS)
@@ -258,6 +295,7 @@ export function createApiApp() {
 
   app.post('/api/image/edit', async (req, res) => {
     try {
+      console.log('[image/edit] incoming request, MOCK_MODEL=', process.env.MOCK_MODEL, 'NODE_ENV=', process.env.NODE_ENV);
       const body = req.body as EditRequest;
       if (!body?.imageDataUrl || !body?.prompt) {
         res.status(400).json({ error: 'imageDataUrl 与 prompt 必填' });
@@ -285,8 +323,14 @@ export function createApiApp() {
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
+      console.error('[image/edit] error object:', err);
       console.error('[image/edit]', message);
-      res.status(500).json({ error: message });
+      if (process.env.NODE_ENV !== 'production') {
+        res.status(500).json({ error: message, stack });
+      } else {
+        res.status(500).json({ error: message });
+      }
     }
   });
 

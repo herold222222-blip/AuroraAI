@@ -23,6 +23,20 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function isUnreachableNetwork(err: unknown): boolean {
+  const text = err instanceof Error ? `${err.message} ${err.stack || ''}` : String(err);
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : null;
+  const causeText =
+    cause instanceof Error
+      ? cause.message
+      : cause && typeof cause === 'object'
+        ? JSON.stringify(cause)
+        : '';
+  return /fetch failed|Connect Timeout|ECONNREFUSED|ENOTFOUND|UND_ERR_CONNECT/i.test(
+    `${text} ${causeText}`,
+  );
+}
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   retries = 3,
@@ -34,7 +48,7 @@ export async function withRetry<T>(
       return await fn();
     } catch (err) {
       last = err;
-      if (i === retries) break;
+      if (i === retries || isUnreachableNetwork(err)) break;
       await sleep(baseMs * Math.pow(2, i));
     }
   }
@@ -47,7 +61,7 @@ function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
   return { mimeType: m[1], base64: m[2] };
 }
 
-function getClient(apiKeyOverride?: string) {
+function getClient(apiKeyOverride?: string, baseUrlOverride?: string) {
   const apiKey =
     apiKeyOverride?.trim() ||
     process.env.GEMINI_API_KEY ||
@@ -57,14 +71,44 @@ function getClient(apiKeyOverride?: string) {
       '缺少 GEMINI_API_KEY。请在 Netlify → Site configuration → Environment variables 中添加该变量并重新部署（本地开发则写入项目根目录 .env），或在管理员后台 API 管理中配置密钥。',
     );
   }
+  const baseUrl =
+    baseUrlOverride?.trim() ||
+    process.env.GEMINI_BASE_URL?.trim() ||
+    process.env.GOOGLE_GEMINI_BASE_URL?.trim() ||
+    '';
   return new GoogleGenAI({
     apiKey,
     httpOptions: {
+      ...(baseUrl ? { baseUrl } : {}),
       headers: {
         'User-Agent': 'aistudio-build',
       },
     },
   });
+}
+
+function formatGeminiError(err: unknown): Error {
+  if (!(err instanceof Error)) return new Error(String(err));
+  const cause = (err as Error & { cause?: unknown }).cause;
+  const causeText =
+    cause instanceof Error
+      ? cause.message
+      : cause && typeof cause === 'object' && 'code' in cause
+        ? String((cause as { code?: string }).code)
+        : '';
+  if (
+    err.message === 'fetch failed' ||
+    /fetch failed|Connect Timeout|无法连接 Gemini/i.test(err.message)
+  ) {
+    return new Error(
+      [
+        '无法连接 Gemini 服务',
+        causeText ? `（${causeText}）` : '',
+        '。本机 Node 不会自动走浏览器系统代理，请确认 Clash 已开启，或在 .env.local 设置 HTTPS_PROXY=http://127.0.0.1:7897 后重启 pnpm dev。',
+      ].join(''),
+    );
+  }
+  return err;
 }
 
 export function buildEditPrompt(req: EditRequest): string {
@@ -174,7 +218,18 @@ export async function editImage(req: EditRequest): Promise<{
   imageDataUrl: string;
   text?: string;
 }> {
+  console.log('[geminiService] editImage invoked, MOCK_MODEL=', process.env.MOCK_MODEL);
   const model = req.model || 'banana-gemini';
+
+  // Development fallback: if MOCK_MODEL is enabled, return a tiny placeholder image
+  // so frontend dev and integration tests can continue without external API access.
+  console.log('[geminiService] NODE_ENV=', process.env.NODE_ENV, ' MOCK_MODEL=', process.env.MOCK_MODEL);
+  if (process.env.MOCK_MODEL && process.env.MOCK_MODEL !== '0') {
+    console.warn('[geminiService] MOCK_MODEL enabled — returning mocked image result');
+    const placeholder =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==';
+    return { imageDataUrl: placeholder, text: 'mocked image (MOCK_MODEL enabled)' };
+  }
   if (model === 'qwen-image') {
     const { editImageWithQwen } = await import('./qwenService');
     return editImageWithQwen(req);
@@ -182,7 +237,7 @@ export async function editImage(req: EditRequest): Promise<{
 
   const { assertApiEnabled } = await import('./apiStore');
   const runtime = await assertApiEnabled('gemini');
-  const ai = getClient(runtime.apiKey);
+  const ai = getClient(runtime.apiKey, runtime.baseUrl);
   const modelId = runtime.model || MODEL;
   const { mimeType, base64 } = parseDataUrl(req.imageDataUrl);
 
@@ -209,15 +264,28 @@ export async function editImage(req: EditRequest): Promise<{
     contents.push({ inlineData: { mimeType: r.mimeType, data: r.base64 } });
   }
 
-  const response = await withRetry(() =>
-    ai.models.generateContent({
-      model: modelId,
-      contents: [{ role: 'user', parts: contents }],
-      config: {
-        responseModalities: [Modality.TEXT, Modality.IMAGE],
-      },
-    }),
-  );
+  let response: any;
+  try {
+    response = await withRetry(() =>
+      ai.models.generateContent({
+        model: modelId,
+        contents: [{ role: 'user', parts: contents }],
+        config: {
+          responseModalities: [Modality.TEXT, Modality.IMAGE],
+        },
+      }),
+    );
+  } catch (err) {
+    // Log detailed error for diagnostics
+    try {
+      console.error('[geminiService] generateContent error:', err && (err.stack || err));
+      if (err && (err as any).name) console.error('[geminiService] error name:', (err as any).name);
+      if (err && (err as any).message) console.error('[geminiService] error message:', (err as any).message);
+    } catch (logErr) {
+      console.error('[geminiService] failed to log error', logErr);
+    }
+    throw formatGeminiError(err);
+  }
 
   const parts = response.candidates?.[0]?.content?.parts ?? [];
   let imageDataUrl = '';

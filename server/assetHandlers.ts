@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import oss from './ossStore';
+import oss, { publicObjectUrl } from './ossStore';
 
 // Return a simple asset manifest by listing OSS prefix 'assets/'
 export async function handleListAssets(req: Request, res: Response) {
@@ -12,7 +12,7 @@ export async function handleListAssets(req: Request, res: Response) {
       key: o.name || o.key || o.name,
       size: o.size,
       lastModified: o.lastModified || o.time || null,
-      url: `https://${process.env.OSS_BUCKET}.${process.env.OSS_ENDPOINT || process.env.OSS_REGION || 'oss-cn-hangzhou'}/${encodeURIComponent(o.name || o.key)}`,
+      url: publicObjectUrl(o.name || o.key),
     }));
     res.json({ ok: true, entries });
   } catch (e) {

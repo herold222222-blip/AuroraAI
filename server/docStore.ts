@@ -141,6 +141,9 @@ export async function loadDocs(): Promise<SiteDocs> {
     const blob = await readBlobDocs();
     if (blob) return blob;
   }
+  if (require('./storage').isForceRemote()) {
+    throw new Error('No remote docs store available but FORCE_USE_REMOTE_STORAGE=true');
+  }
   return readFileDocs();
 }
 
@@ -165,6 +168,11 @@ export async function saveDocs(
     updatedAt: Date.now(),
   });
   const usedBlob = await writeBlobDocs(next);
-  if (!usedBlob) await writeFileDocs(next);
+  if (!usedBlob) {
+    if (require('./storage').isForceRemote()) {
+      throw new Error('Failed to write blob docs and FORCE_USE_REMOTE_STORAGE=true');
+    }
+    await writeFileDocs(next);
+  }
   return next;
 }

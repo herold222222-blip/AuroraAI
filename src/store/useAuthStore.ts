@@ -152,6 +152,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         loginOpen: false,
         busy: false,
       });
+      void import('./useAppStore').then((m) =>
+        m.useAppStore.getState().hydrateFromRemote(),
+      );
       return { ok: true };
     } catch (err) {
       set({ busy: false });
@@ -181,6 +184,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         loginOpen: false,
         busy: false,
       });
+      void import('./useAppStore').then((m) =>
+        m.useAppStore.getState().hydrateFromRemote(),
+      );
       return { ok: true };
     } catch (err) {
       set({ busy: false });
@@ -218,6 +224,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       quotaOpen: false,
       quotaModalKind: 'allExhausted',
     });
+    void import('./useAppStore').then((m) =>
+      m.useAppStore.getState().resetFormalProjects(),
+    );
   },
 
   requireAuth: () => {

@@ -41,6 +41,13 @@ import {
   type ProjectBag,
   type ProjectMeta,
 } from './projectBag';
+import {
+  deleteFormalProjectRemote,
+  loadRemoteProjects,
+  readLastFormalProjectId,
+  saveFormalProjectToCloud,
+  writeLastFormalProjectId,
+} from './projectPersist';
 
 export type PendingPromoteAction =
   | null
@@ -185,6 +192,12 @@ interface AppState {
   removeProject: (id: string) => boolean;
   /** capture active project into projectBags */
   saveActiveProjectBag: () => void;
+  /** Persist current formal project (images + bag) to DB/OSS. */
+  saveCurrentProjectToCloud: (opts?: { silent?: boolean }) => Promise<boolean>;
+  /** Load saved/立项 projects after login. */
+  hydrateFromRemote: () => Promise<void>;
+  /** Drop in-memory formal projects on logout. */
+  resetFormalProjects: () => void;
   requestPromoteForToImage: (snapshotIds: string[]) => void;
   requestPromoteForTo3d: () => void;
   confirmPendingPromote: (name?: string) => void;
@@ -384,6 +397,37 @@ export const useAppStore = create<AppState>((set, get) => {
       .filter((p) => !isScratchProjectId(p.id))
       .map((p) => ({ ...p, kind: p.kind ?? ('project' as const) }));
     return [scratch, ...rest];
+  };
+
+  const persistCloud = (
+    projectId: string,
+    opts?: { bag?: ProjectBag; name?: string; silent?: boolean; guestHint?: boolean },
+  ) => {
+    if (isScratchProjectId(projectId)) return;
+    const token = useAuthStore.getState().token;
+    if (!token) {
+      if (opts?.guestHint) {
+        get().pushToast('未登录：立项仅保存在本机，刷新后会丢失', 'info');
+      }
+      return;
+    }
+    const bag = opts?.bag ?? projectBags.get(projectId);
+    if (!bag) return;
+    const name =
+      opts?.name ||
+      get().projects.find((p) => p.id === projectId)?.name ||
+      get().projectName;
+    void saveFormalProjectToCloud({ projectId, name, bag, token })
+      .then(() => {
+        writeLastFormalProjectId(projectId);
+        if (!opts?.silent) get().pushToast('项目已保存到云端', 'success');
+      })
+      .catch((err) => {
+        get().pushToast(
+          err instanceof Error ? err.message : '云端保存失败',
+          'error',
+        );
+      });
   };
 
   const hydrateBag = (bag: ProjectBag, projectName: string) => {
@@ -667,6 +711,7 @@ export const useAppStore = create<AppState>((set, get) => {
         : get().projectName;
       hydrateBag(bag, name);
       get().pushToast('已清空当前项目数据', 'info');
+      persistCloud(activeProjectId, { bag, silent: true });
     },
 
     back: () => {
@@ -950,6 +995,8 @@ export const useAppStore = create<AppState>((set, get) => {
           ),
         ),
       });
+      projectBags.set(id, captureBag());
+      persistCloud(id, { name: next, silent: true });
     },
 
     saveActiveProjectBag: () => {
@@ -969,11 +1016,13 @@ export const useAppStore = create<AppState>((set, get) => {
       const target = get().projects.find((p) => p.id === id);
       if (!target) return;
 
-      projectBags.set(get().activeProjectId, captureBag());
+      const prevId = get().activeProjectId;
+      projectBags.set(prevId, captureBag());
+      persistCloud(prevId, { silent: true });
       set({
         projects: ensureScratchMeta(
           get().projects.map((p) =>
-            p.id === get().activeProjectId
+            p.id === prevId
               ? { ...p, name: get().projectName, updatedAt: Date.now() }
               : p,
           ),
@@ -988,6 +1037,7 @@ export const useAppStore = create<AppState>((set, get) => {
         ? SCRATCH_PROJECT_NAME
         : target.name;
       set({ activeProjectId: id, projectName: displayName });
+      writeLastFormalProjectId(id);
       hydrateBag(bag, displayName);
       get().pushToast(`已切换到「${displayName}」`, 'info');
     },
@@ -1062,6 +1112,8 @@ export const useAppStore = create<AppState>((set, get) => {
           : `已另存副本「${projectName}」`,
         'success',
       );
+      writeLastFormalProjectId(id);
+      persistCloud(id, { bag: workB, name: projectName, guestHint: true });
       return id;
     },
 
@@ -1110,6 +1162,9 @@ export const useAppStore = create<AppState>((set, get) => {
       });
       hydrateBag(blank, projectName);
       get().pushToast(`已创建空白项目「${projectName}」`, 'success');
+      writeLastFormalProjectId(id);
+      persistCloud(activeId, { silent: true });
+      persistCloud(id, { bag: blank, name: projectName, guestHint: true });
       return id;
     },
 
@@ -1149,7 +1204,109 @@ export const useAppStore = create<AppState>((set, get) => {
       }
 
       get().pushToast(`已删除「${target.name}」`, 'info');
+      const token = useAuthStore.getState().token;
+      if (token) {
+        void deleteFormalProjectRemote(id, token).catch((err) => {
+          get().pushToast(
+            err instanceof Error ? err.message : '云端删除失败',
+            'error',
+          );
+        });
+      }
+      if (readLastFormalProjectId() === id) writeLastFormalProjectId(null);
       return true;
+    },
+
+    saveCurrentProjectToCloud: async (opts) => {
+      const id = get().activeProjectId;
+      if (isScratchProjectId(id)) {
+        if (!opts?.silent) get().pushToast('请先立项，再保存到云端', 'info');
+        return false;
+      }
+      get().saveActiveProjectBag();
+      const token = useAuthStore.getState().token;
+      if (!token) {
+        if (!opts?.silent) get().pushToast('请先登录后再保存到云端', 'info');
+        return false;
+      }
+      try {
+        await saveFormalProjectToCloud({
+          projectId: id,
+          name: get().projectName,
+          bag: projectBags.get(id) ?? captureBag(),
+          token,
+        });
+        writeLastFormalProjectId(id);
+        if (!opts?.silent) get().pushToast('项目已保存到云端', 'success');
+        return true;
+      } catch (err) {
+        if (!opts?.silent) {
+          get().pushToast(
+            err instanceof Error ? err.message : '云端保存失败',
+            'error',
+          );
+        }
+        return false;
+      }
+    },
+
+    hydrateFromRemote: async () => {
+      const token = useAuthStore.getState().token;
+      if (!token) return;
+      try {
+        const remotes = await loadRemoteProjects(token);
+        projectBags.set(get().activeProjectId, captureBag());
+        for (const p of remotes) {
+          projectBags.set(p.id, p.bag);
+        }
+        const remoteIds = new Set(remotes.map((p) => p.id));
+        const keepLocal = get().projects.filter(
+          (p) => !isScratchProjectId(p.id) && !remoteIds.has(p.id),
+        );
+        const formalMeta: ProjectMeta[] = [
+          ...remotes.map((p) => ({
+            id: p.id,
+            name: p.name,
+            updatedAt: p.updatedAt,
+            kind: 'project' as const,
+          })),
+          ...keepLocal,
+        ];
+        set({ projects: ensureScratchMeta(formalMeta) });
+
+        const last = readLastFormalProjectId();
+        const restoreId =
+          (last && remotes.some((p) => p.id === last) ? last : null) ??
+          remotes[0]?.id ??
+          null;
+        if (!restoreId) return;
+        if (restoreId === get().activeProjectId) {
+          hydrateBag(projectBags.get(restoreId) ?? emptyBag(), get().projectName);
+          return;
+        }
+        const name = remotes.find((p) => p.id === restoreId)?.name || '';
+        const bag = projectBags.get(restoreId) ?? emptyBag();
+        set({ activeProjectId: restoreId, projectName: name });
+        writeLastFormalProjectId(restoreId);
+        hydrateBag(bag, name);
+      } catch (err) {
+        console.error('[projects] hydrate', err);
+      }
+    },
+
+    resetFormalProjects: () => {
+      for (const p of get().projects) {
+        if (!isScratchProjectId(p.id)) projectBags.delete(p.id);
+      }
+      const scratch = projectBags.get(SCRATCH_PROJECT_ID) ?? emptyBag();
+      projectBags.set(SCRATCH_PROJECT_ID, scratch);
+      set({
+        projects: ensureScratchMeta([]),
+        activeProjectId: SCRATCH_PROJECT_ID,
+        projectName: SCRATCH_PROJECT_NAME,
+        pendingPromote: null,
+      });
+      hydrateBag(scratch, SCRATCH_PROJECT_NAME);
     },
 
     addLayer: (name, dimension) => {

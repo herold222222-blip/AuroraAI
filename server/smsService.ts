@@ -112,7 +112,9 @@ export type SendSmsResult =
       ok: true;
       cooldownSec: number;
       expiresInSec: number;
-      provider: 'aliyun';
+      provider: 'aliyun' | 'dev';
+      /** 仅在本地开发回退时返回，用于调试 */
+      debugCode?: string;
     }
   | { ok: false; error: string; cooldownSec?: number };
 
@@ -124,7 +126,12 @@ export async function sendSmsCode(
   if (!isValidCnPhone(phone)) {
     return { ok: false, error: '请输入有效的 11 位手机号码' };
   }
-  if (!aliyunConfigured()) {
+  // Determine whether to use Aliyun or allow a developer fallback
+  const useAliyun = aliyunConfigured();
+  const allowDevFallback =
+    String(process.env.ALLOW_SMS_DEV || '').toLowerCase() === 'true' ||
+    String(process.env.NODE_ENV || '').toLowerCase() !== 'production';
+  if (!useAliyun && !allowDevFallback) {
     return { ok: false, error: '短信服务未配置，请联系管理员' };
   }
 
@@ -167,7 +174,12 @@ export async function sendSmsCode(
   };
 
   try {
-    await sendViaAliyun(phone, code);
+    if (useAliyun) {
+      await sendViaAliyun(phone, code);
+    } else {
+      // Dev fallback: log the code and continue (store in Redis or memory)
+      console.info(`[sms][dev] ${purpose}:${phone} -> code=${code}`);
+    }
   } catch (err) {
     return {
       ok: false,
@@ -186,12 +198,17 @@ export async function sendSmsCode(
   } else {
     codes.set(k, entry);
   }
-  return {
+  const base = {
     ok: true,
     cooldownSec: Math.floor(COOLDOWN_MS / 1000),
     expiresInSec: Math.floor(CODE_TTL_MS / 1000),
-    provider: 'aliyun',
-  };
+    provider: useAliyun ? 'aliyun' : 'dev',
+  } as SendSmsResult;
+  if (!useAliyun && allowDevFallback) {
+    // include debugCode for local testing only
+    (base as any).debugCode = code;
+  }
+  return base;
 }
 
 export async function consumeSmsCode(

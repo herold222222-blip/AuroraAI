@@ -63,12 +63,13 @@ CREATE TABLE IF NOT EXISTS sponsorships (
 );
 
 CREATE TABLE IF NOT EXISTS projects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id UUID REFERENCES users(id),
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
   name TEXT,
-  storage_path TEXT, -- e.g. projects/{id}/snapshot.zip
+  storage_path TEXT, -- e.g. projects/{ownerId}/{id}/
   manifest JSONB DEFAULT '{}',
   version BIGINT DEFAULT 0,
   created_at BIGINT DEFAULT (extract(epoch from now()) * 1000),
   updated_at BIGINT DEFAULT (extract(epoch from now()) * 1000)
 );
+CREATE INDEX IF NOT EXISTS projects_owner_id_idx ON projects (owner_id);

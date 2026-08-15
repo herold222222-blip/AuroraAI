@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import react from '@vitejs/plugin-react';
 import { createApiApp } from './server/app';
 
+process.env.NODE_USE_ENV_PROXY ??= '1';
+
 /** Mount Express API as Vite middleware in dev; production uses server/index.ts :3000 */
 function auroraApiPlugin(): Plugin {
   return {
@@ -58,6 +60,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      // 默认 VITE_DEV_PROXY=false：全部 /api 走本机 Express。
+      // VITE_DEV_PROXY=true：/api 代理到线上；再开 VITE_DEV_PAY_LOCAL 则仅支付走本机。
       ...(useDevProxy && payLocal ? [auroraPayLocalPlugin()] : []),
       ...(!useDevProxy ? [auroraApiPlugin()] : []),
     ],
@@ -68,6 +72,8 @@ export default defineConfig(({ mode }) => {
               target: apiOrigin,
               changeOrigin: true,
               secure: true,
+              // 现网 nginx 会剥掉一层 /api，这里补回，否则 /api/image/edit → Express /image/edit 404
+              rewrite: (path) => `/api${path}`,
             },
           }
         : undefined,

@@ -333,6 +333,19 @@ function formatWalletTime(ts: number) {
   }
 }
 
+function toISOStringSafe(ts: any): string | undefined {
+  try {
+    if (ts == null) return undefined;
+    const n = typeof ts === 'number' ? ts : Number(ts);
+    if (!Number.isFinite(n) || isNaN(n)) return undefined;
+    const d = new Date(n);
+    if (isNaN(d.getTime())) return undefined;
+    return d.toISOString();
+  } catch {
+    return undefined;
+  }
+}
+
 const USAGE_KIND_LABEL: Record<UsageKind, string> = {
   geminiEdit: 'Gemini 改图',
   qwenEdit: '千问改图',
@@ -509,11 +522,7 @@ export function WalletModal({ onClose }: { onClose: () => void }) {
                   <li key={r.id} className="wallet-row">
                     <div className="wallet-row-top">
                       <strong>¥{formatMoney(Number(r.amount) || 0)}</strong>
-                      <time
-                        dateTime={new Date(
-                          r.paidAt || r.createdAt,
-                        ).toISOString()}
-                      >
+                      <time dateTime={toISOStringSafe(r.paidAt || r.createdAt)}>
                         {formatWalletTime(r.paidAt || r.createdAt)}
                       </time>
                     </div>
@@ -562,7 +571,7 @@ export function WalletModal({ onClose }: { onClose: () => void }) {
                           ? ` (${e.delta > 0 ? '+' : ''}${e.delta})`
                           : ''}
                       </strong>
-                      <time dateTime={new Date(e.createdAt).toISOString()}>
+                      <time dateTime={toISOStringSafe(e.createdAt)}>
                         {formatWalletTime(e.createdAt)}
                       </time>
                     </div>

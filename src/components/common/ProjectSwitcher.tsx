@@ -18,6 +18,9 @@ export function ProjectSwitcher() {
   const createBlankProject = useAppStore((s) => s.createBlankProject);
   const removeProject = useAppStore((s) => s.removeProject);
   const setProjectName = useAppStore((s) => s.setProjectName);
+  const saveCurrentProjectToCloud = useAppStore(
+    (s) => s.saveCurrentProjectToCloud,
+  );
 
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -238,6 +241,16 @@ export function ProjectSwitcher() {
               </button>
             ) : (
               <div className="project-switcher-actions">
+                <button
+                  type="button"
+                  className="project-switcher-new"
+                  onClick={() => {
+                    setOpen(false);
+                    void saveCurrentProjectToCloud();
+                  }}
+                >
+                  保存到云端
+                </button>
                 <button
                   type="button"
                   className="project-switcher-new"

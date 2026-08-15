@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { getPool } from './db';
+import storage from './storage';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', '.data');
@@ -97,12 +98,21 @@ async function loadDb(): Promise<DbShape> {
     const blob = await readBlobDb();
     if (blob) return blob;
   }
+  // If remote-only mode, do not fall back to file
+  if (storage.isForceRemote()) {
+    throw new Error('No remote orders store available but FORCE_USE_REMOTE_STORAGE=true');
+  }
   return readFileDb();
 }
 
 async function saveDb(db: DbShape): Promise<void> {
   const usedBlob = await writeBlobDb(db);
-  if (!usedBlob) await writeFileDb(db);
+  if (!usedBlob) {
+    if (storage.isForceRemote()) {
+      throw new Error('Failed to write blob store and FORCE_USE_REMOTE_STORAGE=true');
+    }
+    await writeFileDb(db);
+  }
 }
 
 function isOpenStatus(s: PayOrderStatus): boolean {
@@ -215,33 +225,9 @@ export async function createPayOrder(input: {
     updatedAt: now,
   };
 
-  if (process.env.DATABASE_URL) {
-    try {
-      const pool = getPool();
-      await pool.query(
-        `INSERT INTO orders (id, out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)` ,
-        [
-          order.id,
-          order.outTradeNo,
-          order.userId,
-          order.amountFen,
-          order.amountYuan,
-          order.status,
-          order.message,
-          order.codeUrl,
-          order.expireAt,
-          order.createdAt,
-          order.updatedAt,
-        ],
-      );
-      return order;
-    } catch (e) {
-      console.error('pg createPayOrder', e);
-      // fallback to file
-    }
-  }
-
+  // NOTE: do not persist to Postgres at order creation time to avoid premature
+  // DB rows for unpaid orders. Persist to blob/file store for ephemeral access
+  // and only write to Postgres when payment is confirmed (see `updatePayOrder`).
   const db = await loadDb();
   const now2 = Date.now();
   const o2 = { ...order, createdAt: now2, updatedAt: now2 };
@@ -310,7 +296,42 @@ export async function updatePayOrder(
       const sql = `UPDATE orders SET ${fields.join(', ')} WHERE out_trade_no=$${i} RETURNING *`;
       vals.push(outTradeNo);
       const res = await pool.query(sql, vals);
-      if (!res.rows || res.rows.length === 0) return null;
+      if (!res.rows || res.rows.length === 0) {
+        // If there is no row updated, the order may not exist in Postgres because
+        // we defer insertion until payment. Load the order from blob/file store
+        // and insert it now with applied patch (only when patch contains paid status or transaction).
+        try {
+          const localDb = await loadDb();
+          const existing = localDb.orders.find((o) => o.outTradeNo === outTradeNo);
+          if (!existing) return null;
+          const next = { ...existing, ...patch, updatedAt: Date.now() } as PayOrder;
+          // insert into Postgres
+          await pool.query(
+            `INSERT INTO orders (id, out_trade_no, user_id, amount_fen, amount_yuan, status, message, code_url, expire_at, created_at, updated_at, transaction_id, paid_at, payer_openid)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+            [
+              next.id,
+              next.outTradeNo,
+              next.userId,
+              next.amountFen,
+              next.amountYuan,
+              next.status,
+              next.message,
+              next.codeUrl,
+              next.expireAt,
+              next.createdAt,
+              next.updatedAt,
+              next.transactionId || null,
+              next.paidAt || null,
+              next.payerOpenid || null,
+            ],
+          );
+          return next;
+        } catch (ie) {
+          console.error('pg insert-on-update missing row failed', ie);
+          // fallback to file handling below
+        }
+      }
       const r = res.rows[0];
       return {
         id: r.id,
