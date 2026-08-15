@@ -309,7 +309,11 @@ async function syncOrderWithWechat(order: PayOrder): Promise<PayOrder> {
       return u || { ...current, status: 'closed' };
     }
   } catch (err) {
-    console.error('[pay] query order', err);
+    console.error(
+      '[pay] query order failed（轮询无法确认支付；请检查代理/微信API连通）',
+      current.outTradeNo,
+      err,
+    );
   }
   return current;
 }
@@ -557,7 +561,14 @@ export async function handleWechatPayNotify(
       },
       rawBody,
     );
-    if (!verified) return failWx('签名校验失败');
+    if (!verified) {
+      console.error('[pay] notify signature failed', {
+        serial: headerGet(headers, 'wechatpay-serial'),
+        hasTs: Boolean(headerGet(headers, 'wechatpay-timestamp')),
+        bodyLen: rawBody.length,
+      });
+      return failWx('签名校验失败');
+    }
 
     const parsed = JSON.parse(rawBody) as {
       resource?: {
@@ -568,6 +579,11 @@ export async function handleWechatPayNotify(
       };
     };
     const resource = decryptNotifyResource(parsed);
+    console.log('[pay] notify decrypted', {
+      outTradeNo: resource.outTradeNo,
+      tradeState: resource.tradeState,
+      transactionId: resource.transactionId,
+    });
     if (resource.tradeState && resource.tradeState !== 'SUCCESS') {
       return okWx();
     }
@@ -583,6 +599,7 @@ export async function handleWechatPayNotify(
       amountTotal: resource.amountTotal,
       payerOpenid: resource.payerOpenid,
     });
+    console.log('[pay] notify fulfilled', resource.outTradeNo);
     return okWx();
   } catch (err) {
     console.error('[pay] notify', err);

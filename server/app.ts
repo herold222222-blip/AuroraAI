@@ -95,19 +95,28 @@ export function createApiApp() {
   app.use(restoreStrippedApiPrefix);
 
   // 微信支付回调需要原始 body 验签，必须在 json parser 之前挂载
-  app.post(
-    '/api/pay/wechat/notify',
-    express.raw({ type: '*/*', limit: '2mb' }),
-    async (req, res) => {
-      const raw =
-        Buffer.isBuffer(req.body)
-          ? req.body.toString('utf8')
-          : String(req.body || '');
-      const r = await handleWechatPayNotify(raw, reqHeaders(req));
-      if (r.contentType) res.setHeader('Content-Type', r.contentType);
-      res.status(r.status).send(r.rawBody ?? JSON.stringify(r.body));
-    },
-  );
+  // 同时挂 /api/... 与剥前缀后的 /pay/...，避免 nginx rewrite 导致收不到回调
+  const wechatNotify = async (
+    req: express.Request,
+    res: express.Response,
+  ) => {
+    const raw = Buffer.isBuffer(req.body)
+      ? req.body.toString('utf8')
+      : String(req.body || '');
+    console.log(
+      '[pay] notify hit',
+      req.method,
+      req.originalUrl || req.url,
+      'bytes=',
+      raw.length,
+    );
+    const r = await handleWechatPayNotify(raw, reqHeaders(req));
+    if (r.contentType) res.setHeader('Content-Type', r.contentType);
+    res.status(r.status).send(r.rawBody ?? JSON.stringify(r.body));
+  };
+  const notifyRaw = express.raw({ type: '*/*', limit: '2mb' });
+  app.post('/api/pay/wechat/notify', notifyRaw, wechatNotify);
+  app.post('/pay/wechat/notify', notifyRaw, wechatNotify);
 
   app.use(
     express.json({

@@ -12,7 +12,7 @@
     "build:netlify": "tsc -b && vite build --outDir dist2 --emptyOutDir",
     "lint": "oxlint",
     "preview": "vite preview",
-    "start:api": "NODE_USE_ENV_PROXY=1 tsx server/index.ts",
+    "start:api": "tsx server/index.ts",
     "start:api:prod-env": "bash ./scripts/run-local-using-prod-env.sh"
   },
   "dependencies": {
