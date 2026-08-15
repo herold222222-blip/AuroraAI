@@ -157,7 +157,7 @@ function publicOrder(order: PayOrder) {
     outTradeNo: order.outTradeNo,
     amount: order.amountYuan,
     amountFen: order.amountFen,
-    message: order.message,
+    message: order.message || '',
     status: order.status,
     codeUrl: order.codeUrl,
     expireAt: order.expireAt,
@@ -287,6 +287,7 @@ async function syncOrderWithWechat(order: PayOrder): Promise<PayOrder> {
 
   try {
     const q = await queryByOutTradeNo(current.outTradeNo);
+    console.log('[pay] query', current.outTradeNo, q.tradeState);
     if (q.tradeState === 'SUCCESS') {
       return fulfillPaidOrder(current, {
         transactionId: q.transactionId || '',

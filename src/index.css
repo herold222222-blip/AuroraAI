@@ -2005,6 +2005,10 @@ select {
   cursor: not-allowed;
   box-shadow: none;
 }
+.donate-confirm-paid-btn {
+  margin-top: 10px;
+  width: 100%;
+}
 .donate-foot-note {
   margin: 12px 0 0;
   font-size: 11px;

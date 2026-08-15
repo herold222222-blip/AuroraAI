@@ -149,9 +149,10 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
           } else if (latest.status === 'paid') {
             stopPolling();
             if (user) setUser(user);
+            const msg = String(latest.message || '').trim();
             pushToast(
               `感谢赞赏 ¥${formatAmount(latest.amount)}${
-                latest.message.trim() ? '，留言已收到' : ''
+                msg ? '，留言已收到' : ''
               }`,
               'success',
             );
@@ -167,8 +168,8 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
                 : '订单已关闭，请刷新二维码',
             );
           }
-        } catch {
-          // ignore single poll failure
+        } catch (err) {
+          console.warn('[donate] poll status', err);
         }
       })();
     }, interval);
@@ -194,9 +195,10 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
       if (seq !== createSeqRef.current) return;
       if (user) setUser(user);
       if (next.status === 'paid') {
+        const msg = String(next.message || '').trim();
         pushToast(
           `感谢赞赏 ¥${formatAmount(next.amount)}${
-            next.message.trim() ? '，留言已收到' : ''
+            msg ? '，留言已收到' : ''
           }`,
           'success',
         );
@@ -325,6 +327,48 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
       msg: message,
       forceRefresh: true,
     });
+  };
+
+  const onConfirmPaid = () => {
+    if (!token || !orderRef.current) {
+      pushToast('暂无待确认订单', 'info');
+      return;
+    }
+    const no = orderRef.current.outTradeNo;
+    setPollHint('正在向微信确认支付结果…');
+    void apiDonateOrderStatus(token, no)
+      .then(({ order: latest, user }) => {
+        setOrder(latest);
+        if (latest.status === 'paid') {
+          stopPolling();
+          if (user) setUser(user);
+          const msg = String(latest.message || '').trim();
+          pushToast(
+            `感谢赞赏 ¥${formatAmount(latest.amount)}${
+              msg ? '，留言已收到' : ''
+            }`,
+            'success',
+          );
+          onClose();
+          return;
+        }
+        setPollHint(
+          latest.status === 'user_paying'
+            ? '微信仍显示支付中，请稍后再点「我已完成支付」'
+            : '微信尚未确认到账，请确认已支付成功后再试',
+        );
+        if (
+          latest.status === 'pending' ||
+          latest.status === 'user_paying'
+        ) {
+          startPolling(latest);
+        }
+      })
+      .catch((err) => {
+        const text = err instanceof Error ? err.message : String(err);
+        setPollHint(`确认失败：${text}`);
+        pushToast(text, 'error');
+      });
   };
 
   const statusLabel = (() => {
@@ -500,8 +544,19 @@ export function DonatePage({ onClose }: { onClose: () => void }) {
           >
             {creating ? '正在生成收款码…' : '刷新二维码'}
           </button>
+          {order &&
+          !creating &&
+          (order.status === 'pending' || order.status === 'user_paying') ? (
+            <button
+              type="button"
+              className="btn ghost block donate-confirm-paid-btn"
+              onClick={onConfirmPaid}
+            >
+              我已完成支付
+            </button>
+          ) : null}
           <p className="donate-foot-note">
-            选择或修改金额后会自动生成微信收款码；留言修改不会更换二维码。金额以服务端校验为准，支付成功后自动入账。
+            选择或修改金额后会自动生成微信收款码；支付成功后页面会自动关闭。若已付款未跳转，可点「我已完成支付」。
           </p>
         </section>
       </main>
