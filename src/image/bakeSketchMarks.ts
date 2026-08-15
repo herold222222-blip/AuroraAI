@@ -3,20 +3,13 @@
  * The model must see the ink on the image (not a separate soft ROI mask).
  */
 
+import { loadImageEl } from './loadImage';
+
 export interface SketchMarkBakeInput {
   n: number;
   x: number;
   y: number;
   strokeMaskDataUrl?: string;
-}
-
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('图片加载失败'));
-    img.src = url;
-  });
 }
 
 function drawNumberBadge(
@@ -48,7 +41,7 @@ async function drawStrokeTint(
   canvasW: number,
   canvasH: number,
 ) {
-  const maskImg = await loadImage(strokeMaskDataUrl);
+  const maskImg = await loadImageEl(strokeMaskDataUrl);
   const tmp = document.createElement('canvas');
   tmp.width = maskImg.naturalWidth;
   tmp.height = maskImg.naturalHeight;
@@ -76,7 +69,7 @@ export async function bakeSketchMarksOntoImage(
   marks: SketchMarkBakeInput[],
 ): Promise<string> {
   if (!marks.length) return imageUrl;
-  const img = await loadImage(imageUrl);
+  const img = await loadImageEl(imageUrl);
   const w = img.naturalWidth;
   const h = img.naturalHeight;
   if (!w || !h) throw new Error('图片尺寸无效');

@@ -118,13 +118,8 @@ function getDepth(onProgress?: (p: number) => void) {
  * worked without this; local files often do not.
  */
 async function loadImageForAI(imageUrl: string): Promise<RawImage> {
-  const el = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () =>
-      reject(new Error('无法读取图片，请换一张 JPG / PNG / WEBP 后重试'));
-    img.src = imageUrl;
-  });
+  const { loadImageEl } = await import('../image/loadImage');
+  const el = await loadImageEl(imageUrl);
 
   const srcW = el.naturalWidth || el.width;
   const srcH = el.naturalHeight || el.height;

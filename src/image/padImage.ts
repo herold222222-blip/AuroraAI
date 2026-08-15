@@ -2,6 +2,8 @@
  * Pad image to a Gemini-supported aspect ratio, then crop result back.
  */
 
+import { loadImageEl } from './loadImage';
+
 export const GEMINI_RATIOS = [
   { w: 1, h: 1, name: '1:1' },
   { w: 3, h: 4, name: '3:4' },
@@ -45,17 +47,8 @@ function nearestRatio(w: number, h: number) {
   return best;
 }
 
-function loadHtmlImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('图片加载失败'));
-    img.src = src;
-  });
-}
-
 export async function padToSupportedRatio(dataUrl: string): Promise<PadResult> {
-  const img = await loadHtmlImage(dataUrl);
+  const img = await loadImageEl(dataUrl);
   const width = img.naturalWidth;
   const height = img.naturalHeight;
   const ratio = nearestRatio(width, height);
@@ -112,7 +105,7 @@ export async function cropFromPad(
   targetW?: number,
   targetH?: number,
 ): Promise<string> {
-  const img = await loadHtmlImage(resultDataUrl);
+  const img = await loadImageEl(resultDataUrl);
   const canvas = document.createElement('canvas');
   const w = targetW ?? crop.w;
   const h = targetH ?? crop.h;
@@ -159,7 +152,7 @@ export async function cropFromPadSized(
   outW: number,
   outH: number,
 ): Promise<string> {
-  const img = await loadHtmlImage(resultDataUrl);
+  const img = await loadImageEl(resultDataUrl);
   const rw = img.naturalWidth;
   const rh = img.naturalHeight;
   // Cover: fit pad frame into result, center-crop overflow — keeps geometry stable.
@@ -193,7 +186,7 @@ export async function resizeImage(
   dataUrl: string,
   scale: number,
 ): Promise<string> {
-  const img = await loadHtmlImage(dataUrl);
+  const img = await loadImageEl(dataUrl);
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
   canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
@@ -208,29 +201,23 @@ export async function resizeToMaxSide(
   dataUrl: string,
   maxSide: number,
 ): Promise<string> {
-  const img = await loadHtmlImage(dataUrl);
+  const img = await loadImageEl(dataUrl);
   const scale = maxSide / Math.max(img.naturalWidth, img.naturalHeight);
   if (scale <= 1) return dataUrl;
   return resizeImage(dataUrl, scale);
 }
 
-export function compressDataUrl(
+export async function compressDataUrl(
   dataUrl: string,
   maxSide = 1024,
   quality = 0.72,
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(img.width * scale));
-      canvas.height = Math.max(1, Math.round(img.height * scale));
-      const ctx = canvas.getContext('2d')!;
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', quality));
-    };
-    img.onerror = () => reject(new Error('压缩失败'));
-    img.src = dataUrl;
-  });
+  const img = await loadImageEl(dataUrl);
+  const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL('image/jpeg', quality);
 }

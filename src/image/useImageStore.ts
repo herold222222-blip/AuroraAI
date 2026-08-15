@@ -555,12 +555,8 @@ export const useImageStore = create<ImageState>((set, get) => ({
   addOverlayFromUrl: async (url, label) => {
     const base = get().currentUrl;
     if (!base) return;
-    const img = await new Promise<HTMLImageElement>((res, rej) => {
-      const el = new Image();
-      el.onload = () => res(el);
-      el.onerror = () => rej(new Error('base fail'));
-      el.src = base;
-    });
+    const { loadImageEl } = await import('./loadImage');
+    const img = await loadImageEl(base);
     const natW = img.naturalWidth;
     const natH = img.naturalHeight;
     const size = await measureSticker(url);

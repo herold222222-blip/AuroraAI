@@ -163,6 +163,9 @@ export async function handleProjectMedia(req: Request, res: Response) {
     const { buffer, contentType } = await getObjectBuffer(key);
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'private, max-age=300');
+    // 允许画布 crossOrigin / fetch，避免 toDataURL 污染
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.send(buffer);
   } catch (e) {
     console.error('[projects] media', e);

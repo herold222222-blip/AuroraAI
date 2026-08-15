@@ -35,12 +35,8 @@ export function binaryMaskToDataUrl(
 export async function dataUrlToBinaryMask(
   dataUrl: string,
 ): Promise<{ mask: Uint8Array; w: number; h: number }> {
-  const img = new Image();
-  await new Promise<void>((res, rej) => {
-    img.onload = () => res();
-    img.onerror = () => rej(new Error('mask load fail'));
-    img.src = dataUrl;
-  });
+  const { loadImageEl } = await import('./loadImage');
+  const img = await loadImageEl(dataUrl);
   const w = img.naturalWidth;
   const h = img.naturalHeight;
   const canvas = document.createElement('canvas');

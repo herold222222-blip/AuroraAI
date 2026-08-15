@@ -443,11 +443,7 @@ export async function runMultiBrushEdits(): Promise<string> {
 }
 
 async function loadSize(url: string) {
-  const img = new Image();
-  await new Promise<void>((res, rej) => {
-    img.onload = () => res();
-    img.onerror = () => rej(new Error('load fail'));
-    img.src = url;
-  });
+  const { loadImageEl } = await import('./loadImage');
+  const img = await loadImageEl(url);
   return { w: img.naturalWidth, h: img.naturalHeight };
 }

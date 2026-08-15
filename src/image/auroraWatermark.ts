@@ -2,17 +2,10 @@
  * Burn a small "Aurora AI" watermark into the bottom-right of an AI result image.
  */
 
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('水印：图片加载失败'));
-    img.src = url;
-  });
-}
+import { loadImageEl } from './loadImage';
 
 export async function applyAuroraWatermark(imageUrl: string): Promise<string> {
-  const img = await loadImage(imageUrl);
+  const img = await loadImageEl(imageUrl);
   const w = img.naturalWidth;
   const h = img.naturalHeight;
   if (!w || !h) return imageUrl;

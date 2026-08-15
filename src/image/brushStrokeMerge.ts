@@ -160,12 +160,8 @@ export async function redrawBrushOverlay(
       ? ([251, 191, 36] as const) // Gemini-like sketch yellow
       : ([239, 68, 68] as const);
   for (const r of regions) {
-    const img = new Image();
-    await new Promise<void>((res, rej) => {
-      img.onload = () => res();
-      img.onerror = () => rej(new Error('overlay'));
-      img.src = r.maskDataUrl;
-    });
+    const { loadImageEl } = await import('./loadImage');
+    const img = await loadImageEl(r.maskDataUrl);
     // Tint white mask → translucent stroke color
     const tmp = document.createElement('canvas');
     tmp.width = img.naturalWidth;

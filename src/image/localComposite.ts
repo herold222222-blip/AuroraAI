@@ -1,14 +1,7 @@
 /** Local-edit helpers: hotspot ROI + brush mask + strict composite */
 
-export async function loadImageEl(src: string): Promise<HTMLImageElement> {
-  const img = new Image();
-  await new Promise<void>((res, rej) => {
-    img.onload = () => res();
-    img.onerror = () => rej(new Error('图片加载失败'));
-    img.src = src;
-  });
-  return img;
-}
+export { loadImageEl } from './loadImage';
+import { loadImageEl } from './loadImage';
 
 function colorDist(
   data: Uint8ClampedArray,
