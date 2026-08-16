@@ -7,6 +7,8 @@ import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import { downloadImages } from '../../utils/downloadImage';
 import { formatDateTime } from '../../utils/formatDateTime';
 import { ImageTo3DButton } from './ImageTo3DButton';
+import { useAssetStore } from '../../store/useAssetStore';
+import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 
 const ORIGINAL_SELECT_ID = '__original__';
 
@@ -75,6 +77,10 @@ export function ImageRightSidebar() {
   const lastClickedIdRef = useRef<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  // asset counts and limits (kept reactive)
+  const assetCounts = useAssetStore((s) => s.counts());
+  const assetLimits = useAssetStore((s) => s.limits());
+
   const activeAlbum = sourceAlbums.find((a) => a.id === activeSourceId);
   const fromSnapshot =
     Boolean(sourceSnapshotId) || Boolean(activeAlbum?.sourceSnapshotId);
@@ -113,7 +119,8 @@ export function ImageRightSidebar() {
     ? '← 返回快照列表'
     : '← 返回原图列表';
 
-  const uploadFiles = (files: FileList | File[]) => {
+  const uploadFiles = async (files: FileList | File[]) => {
+    if (!(await ensureCanUploadImage())) return;
     const list = Array.from(files);
     list.forEach((f, i) => {
       const reader = new FileReader();
@@ -589,7 +596,7 @@ export function ImageRightSidebar() {
           hidden
           onChange={(e) => {
             const files = e.target.files;
-            if (files?.length) uploadFiles(files);
+            if (files?.length) void uploadFiles(files);
             e.target.value = '';
           }}
         />
@@ -598,7 +605,16 @@ export function ImageRightSidebar() {
           <button
             type="button"
             className="btn holo block"
-            onClick={() => fileRef.current?.click()}
+            disabled={assetCounts.image >= assetLimits.image}
+            title={
+              assetCounts.image >= assetLimits.image
+                ? MSG_IMAGE_CAP
+                : '上传本地图片'
+            }
+            onClick={async () => {
+              if (!(await ensureCanUploadImage())) return;
+              fileRef.current?.click();
+            }}
           >
             上传本地图片
           </button>

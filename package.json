@@ -14,6 +14,7 @@
     "preview": "vite preview",
     "start:api": "tsx server/index.ts",
     "start:api:prod": "node --import tsx server/index.ts",
+    "test:asset-quota": "node scripts/test-asset-quota.mjs",
     "start:api:prod-env": "bash ./scripts/run-local-using-prod-env.sh"
   },
   "dependencies": {

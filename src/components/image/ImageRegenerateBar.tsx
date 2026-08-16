@@ -1,6 +1,8 @@
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import { reportAiEditError, runAiEdit } from '../../image/runAiEdit';
+import { useAssetStore } from '../../store/useAssetStore';
+import { ensureCanEditImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 
 /** Compact regenerate control, placed directly under the canvas image. */
 export function ImageRegenerateBar() {
@@ -14,6 +16,7 @@ export function ImageRegenerateBar() {
   const commitImage = useImageStore((s) => s.commitImage);
   const setLastGeneratePrompt = useImageStore((s) => s.setLastGeneratePrompt);
   const savedImages = useImageStore((s) => s.savedImages);
+  const imageAtCap = useAssetStore((s) => s.counts().image >= s.limits().image);
 
   const reusePrompt = (lastGeneratePrompt || prompt || '').trim();
   const isResult =
@@ -31,6 +34,7 @@ export function ImageRegenerateBar() {
       return;
     }
     void (async () => {
+      if (!(await ensureCanEditImage())) return;
       setBusy(true);
       try {
         setLastGeneratePrompt(p);
@@ -54,11 +58,13 @@ export function ImageRegenerateBar() {
       <button
         type="button"
         className="img-regen-btn"
-        disabled={busy || !reusePrompt}
+        disabled={busy || !reusePrompt || imageAtCap}
         title={
-          reusePrompt
-            ? `用上次提示词基于原图重新生成：${reusePrompt}`
-            : '请先完成一次生成'
+          imageAtCap
+            ? MSG_IMAGE_CAP
+            : reusePrompt
+              ? `用上次提示词基于原图重新生成：${reusePrompt}`
+              : '请先完成一次生成'
         }
         onClick={onRegenerate}
       >

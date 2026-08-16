@@ -11,6 +11,8 @@ import { useImageStore } from '../../image/useImageStore';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { useAssetStore } from '../../store/useAssetStore';
+import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 
 const MAX_REFS = 5;
 
@@ -53,6 +55,7 @@ export async function addPromptRefFiles(
   const pushToast = useAppStore.getState().pushToast;
   const addMaterial = useImageStore.getState().addMaterial;
   if (!files.length) return 0;
+  if (!(await ensureCanUploadImage())) return 0;
 
   let added = 0;
   for (const f of files) {
@@ -171,6 +174,9 @@ export function PromptRefPlus({ disabled }: { disabled?: boolean }) {
   const materials = useImageStore((s) => s.materials);
   const fileRef = useRef<HTMLInputElement>(null);
   const full = materials.length >= MAX_REFS;
+  const blockedByAssetLimit = useAssetStore(
+    (s) => s.counts().image >= s.limits().image,
+  );
 
   return (
     <>
@@ -190,12 +196,17 @@ export function PromptRefPlus({ disabled }: { disabled?: boolean }) {
         type="button"
         className="img-prompt-ref-plus"
         title={
-          full
-            ? `参考图已满（最多 ${MAX_REFS} 张）`
-            : `上传参考图（最多 ${MAX_REFS} 张，图1–图${MAX_REFS}）；也可 Ctrl+V 粘贴或拖入对话框`
+          blockedByAssetLimit
+            ? MSG_IMAGE_CAP
+            : full
+              ? `参考图已满（最多 ${MAX_REFS} 张）`
+              : `上传参考图（最多 ${MAX_REFS} 张，图1–图${MAX_REFS}）；也可 Ctrl+V 粘贴或拖入对话框`
         }
-        disabled={disabled || full}
-        onClick={() => fileRef.current?.click()}
+        disabled={disabled || full || blockedByAssetLimit}
+        onClick={async () => {
+          if (!(await ensureCanUploadImage())) return;
+          fileRef.current?.click();
+        }}
       >
         ＋
       </button>

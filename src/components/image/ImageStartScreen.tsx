@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
+import { useAssetStore } from '../../store/useAssetStore';
+import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 
 const EXAMPLES = [
   { src: '/examples/example-1.jpg', name: '山谷溪流景观' },
@@ -17,8 +19,14 @@ export function ImageStartScreen() {
   const pushToast = useAppStore((s) => s.pushToast);
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const imageAtCap = useAssetStore((s) => {
+    const c = s.counts();
+    const l = s.limits();
+    return c.image >= l.image;
+  });
 
-  const acceptFile = (file: File) => {
+  const acceptFile = async (file: File) => {
+    if (!(await ensureCanUploadImage())) return;
     if (!ACCEPT.includes(file.type)) {
       pushToast('仅支持 JPG / PNG / WEBP 格式图片', 'error');
       return;
@@ -35,6 +43,11 @@ export function ImageStartScreen() {
     reader.readAsDataURL(file);
   };
 
+  const tryOpenPicker = async () => {
+    if (!(await ensureCanUploadImage())) return;
+    fileRef.current?.click();
+  };
+
   return (
     <div className="img-start">
       <div className="img-start-inner">
@@ -48,17 +61,17 @@ export function ImageStartScreen() {
 
         <div
           className={`upload-box img-start-upload-box${drag ? ' drag' : ''}`}
-          onClick={() => fileRef.current?.click()}
+          onClick={() => void tryOpenPicker()}
           onDragOver={(e) => {
             e.preventDefault();
-            setDrag(true);
+            if (!imageAtCap) setDrag(true);
           }}
           onDragLeave={() => setDrag(false)}
           onDrop={(e) => {
             e.preventDefault();
             setDrag(false);
             const file = e.dataTransfer.files?.[0];
-            if (file) acceptFile(file);
+            if (file) void acceptFile(file);
           }}
         >
           <input
@@ -66,17 +79,24 @@ export function ImageStartScreen() {
             type="file"
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
             hidden
+            disabled={imageAtCap}
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) acceptFile(f);
+              if (f) void acceptFile(f);
               e.target.value = '';
             }}
           />
           <div className="upload-inner">
             <div className="upload-icon">⬆</div>
-            <div className="upload-title">点击选择，或将图片拖拽到此处</div>
+            <div className="upload-title">
+              {imageAtCap
+                ? '图片资产已达上限'
+                : '点击选择，或将图片拖拽到此处'}
+            </div>
             <div className="upload-hint">
-              支持 JPG / PNG / WEBP，单张上限 20MB
+              {imageAtCap
+                ? MSG_IMAGE_CAP
+                : '支持 JPG / PNG / WEBP，单张上限 20MB'}
             </div>
           </div>
         </div>
@@ -105,7 +125,12 @@ export function ImageStartScreen() {
               key={ex.src}
               type="button"
               className="img-start-example"
-              onClick={() => openFromUrl(ex.src, { label: ex.name })}
+              disabled={imageAtCap}
+              title={imageAtCap ? MSG_IMAGE_CAP : ex.name}
+              onClick={async () => {
+                if (!(await ensureCanUploadImage())) return;
+                openFromUrl(ex.src, { label: ex.name });
+              }}
             >
               <img src={ex.src} alt={ex.name} />
               <span>{ex.name}</span>

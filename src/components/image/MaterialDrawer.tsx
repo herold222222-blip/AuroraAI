@@ -3,6 +3,8 @@ import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import { STICKER_PRESETS } from '../../image/stickerPresets';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { useAssetStore } from '../../store/useAssetStore';
+import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 
 export function MaterialDrawer() {
   const open = useImageStore((s) => s.materialDrawerOpen);
@@ -17,6 +19,7 @@ export function MaterialDrawer() {
   const flattenOverlays = useImageStore((s) => s.flattenOverlays);
   const updateOverlay = useImageStore((s) => s.updateOverlay);
   const pushToast = useAppStore((s) => s.pushToast);
+  const imageAtCap = useAssetStore((s) => s.counts().image >= s.limits().image);
   const fileRef = useRef<HTMLInputElement>(null);
   const [tab, setTab] = useState<'plant' | 'people' | 'mine'>('plant');
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
@@ -139,8 +142,12 @@ export function MaterialDrawer() {
               <button
                 type="button"
                 className="btn holo block sm"
-                disabled={busy || !currentUrl}
-                onClick={() => fileRef.current?.click()}
+                disabled={busy || !currentUrl || imageAtCap}
+                title={imageAtCap ? MSG_IMAGE_CAP : undefined}
+                onClick={async () => {
+                  if (!(await ensureCanUploadImage())) return;
+                  fileRef.current?.click();
+                }}
               >
                 上传 PNG / SVG 镂空素材
               </button>

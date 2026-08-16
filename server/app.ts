@@ -211,6 +211,10 @@ export function createApiApp() {
     const { handleListAssets } = await import('./assetHandlers');
     return handleListAssets(req, res);
   });
+  app.get('/api/assets/counts', async (req, res) => {
+    const { handleAssetCounts } = await import('./assetHandlers');
+    return handleAssetCounts(req, res);
+  });
   app.get('/api/auth/users', async (req, res) => {
     const r = await handleListUsers(reqHeaders(req));
     res.status(r.status).json(r.body);

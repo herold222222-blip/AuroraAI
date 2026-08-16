@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageDownloadMenu } from '../common/ImageDownloadContext';
+import { useAssetStore } from '../../store/useAssetStore';
+import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 
 const EXAMPLES = [
   { src: '/examples/example-1.jpg', name: '山谷溪流景观' },
@@ -18,11 +20,13 @@ export function UploadPage() {
   const analyze = useAppStore((s) => s.analyze);
   const pushToast = useAppStore((s) => s.pushToast);
   const openDownloadMenu = useImageDownloadMenu();
+  const imageAtCap = useAssetStore((s) => s.counts().image >= s.limits().image);
 
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const acceptFile = (file: File) => {
+  const acceptFile = async (file: File) => {
+    if (!(await ensureCanUploadImage())) return;
     if (!ACCEPT.includes(file.type)) {
       pushToast('仅支持 JPG / PNG / WEBP 格式图片', 'error');
       return;
@@ -42,10 +46,11 @@ export function UploadPage() {
     e.preventDefault();
     setDrag(false);
     const file = e.dataTransfer.files?.[0];
-    if (file) acceptFile(file);
+    if (file) void acceptFile(file);
   };
 
-  const pickExample = (src: string, name: string) => {
+  const pickExample = async (src: string, name: string) => {
+    if (!(await ensureCanUploadImage())) return;
     setImage({ url: src, name, size: 0 });
   };
 
@@ -73,10 +78,13 @@ export function UploadPage() {
 
         <div
           className={`upload-box${drag ? ' drag' : ''}${image ? ' has-image' : ''}`}
-          onClick={() => inputRef.current?.click()}
+          onClick={async () => {
+            if (!(await ensureCanUploadImage())) return;
+            inputRef.current?.click();
+          }}
           onDragOver={(e) => {
             e.preventDefault();
-            setDrag(true);
+            if (!imageAtCap) setDrag(true);
           }}
           onDragLeave={() => setDrag(false)}
           onDrop={onDrop}
@@ -86,9 +94,10 @@ export function UploadPage() {
             type="file"
             accept=".jpg,.jpeg,.png,.webp"
             hidden
+            disabled={imageAtCap}
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) acceptFile(f);
+              if (f) void acceptFile(f);
               e.target.value = '';
             }}
           />
@@ -105,8 +114,11 @@ export function UploadPage() {
                 <span className="fname">{image.name}</span>
                 <button
                   className="btn ghost sm"
-                  onClick={(e) => {
+                  disabled={imageAtCap}
+                  title={imageAtCap ? MSG_IMAGE_CAP : undefined}
+                  onClick={async (e) => {
                     e.stopPropagation();
+                    if (!(await ensureCanUploadImage())) return;
                     inputRef.current?.click();
                   }}
                 >
@@ -117,9 +129,15 @@ export function UploadPage() {
           ) : (
             <div className="upload-inner">
               <div className="upload-icon">⬆</div>
-              <div className="upload-title">点击选择，或将图片拖拽到此处</div>
+              <div className="upload-title">
+                {imageAtCap
+                  ? '图片资产已达上限'
+                  : '点击选择，或将图片拖拽到此处'}
+              </div>
               <div className="upload-hint">
-                支持 JPG / PNG / WEBP，单张上限 20MB
+                {imageAtCap
+                  ? MSG_IMAGE_CAP
+                  : '支持 JPG / PNG / WEBP，单张上限 20MB'}
               </div>
             </div>
           )}
@@ -149,7 +167,9 @@ export function UploadPage() {
                 className={`example-card${
                   image?.url === ex.src ? ' active' : ''
                 }`}
-                onClick={() => pickExample(ex.src, ex.name)}
+                onClick={() => void pickExample(ex.src, ex.name)}
+                disabled={imageAtCap}
+                title={imageAtCap ? MSG_IMAGE_CAP : ex.name}
               >
                 <img src={ex.src} alt={ex.name} />
                 <span>{ex.name}</span>

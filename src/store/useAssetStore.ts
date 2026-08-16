@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { apiUrl } from '../config/api';
 import { useAuthStore } from './useAuthStore';
+import {
+  USER_IMAGE_CAP,
+  USER_MODEL_CAP,
+  type AssetCounts,
+} from './assetCaps';
 
 export type AssetKind = 'image' | 'model';
 
@@ -18,9 +23,6 @@ export interface AssetItem {
 const DB_NAME = 'aurora-assets';
 const DB_VERSION = 1;
 const STORE = 'items';
-
-const USER_IMAGE_CAP = 20;
-const USER_MODEL_CAP = 2;
 
 function uid(prefix = 'asset'): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
@@ -87,100 +89,123 @@ function caps() {
   };
 }
 
-function pruneOldest(items: AssetItem[], kind: AssetKind, max: number): {
-  kept: AssetItem[];
-  removedIds: string[];
-} {
-  if (!Number.isFinite(max)) return { kept: items, removedIds: [] };
-  const ofKind = items
-    .filter((x) => x.kind === kind)
-    .sort((a, b) => a.createdAt - b.createdAt);
-  if (ofKind.length <= max) return { kept: items, removedIds: [] };
-  const drop = ofKind.slice(0, ofKind.length - max).map((x) => x.id);
-  const dropSet = new Set(drop);
-  return {
-    kept: items.filter((x) => !dropSet.has(x.id)),
-    removedIds: drop,
-  };
-}
-
 interface AssetState {
   items: AssetItem[];
   loaded: boolean;
+  /** 服务端 counts 覆盖（有则优先于本地 items 统计） */
+  remoteCounts: AssetCounts | null;
   load: () => Promise<void>;
-  addImageAsset: (input: {
-    id?: string;
-    url: string;
-    label: string;
-    projectId: string;
-    projectName: string;
-    prompt?: string;
-    createdAt?: number;
-  }) => Promise<AssetItem | null>;
-  addModelAsset: (input: {
-    id?: string;
-    url: string;
-    label: string;
-    projectId: string;
-    projectName: string;
-    createdAt?: number;
-  }) => Promise<AssetItem | null>;
+  applyRemoteCounts: (counts: AssetCounts) => void;
+  addImageAsset: (
+    input: {
+      id?: string;
+      url: string;
+      label: string;
+      projectId: string;
+      projectName: string;
+      prompt?: string;
+      createdAt?: number;
+    },
+    opts?: { skipQuota?: boolean },
+  ) => Promise<AssetItem | null>;
+  addModelAsset: (
+    input: {
+      id?: string;
+      url: string;
+      label: string;
+      projectId: string;
+      projectName: string;
+      createdAt?: number;
+    },
+    opts?: { skipQuota?: boolean },
+  ) => Promise<AssetItem | null>;
   removeAssets: (ids: string[]) => Promise<AssetItem[]>;
   renameAsset: (id: string, label: string) => Promise<boolean>;
-  counts: () => { image: number; model: number };
+  counts: () => AssetCounts;
   limits: () => { image: number; model: number };
 }
 
 export const useAssetStore = create<AssetState>((set, get) => ({
   items: [],
   loaded: false,
+  remoteCounts: null,
+
+  applyRemoteCounts: (counts) => {
+    set({
+      remoteCounts: {
+        image: Math.max(0, Number(counts.image) || 0),
+        model: Math.max(0, Number(counts.model) || 0),
+      },
+    });
+  },
 
   load: async () => {
-    // 1) load cached items from IndexedDB
     const cached = await idbGetAll();
     cached.sort((a, b) => b.createdAt - a.createdAt);
     set({ items: cached, loaded: true });
 
-    // 2) in background, fetch manifest from server and merge
-    void (async () => {
-      try {
-        const res = await fetch(apiUrl('/api/assets/manifest'));
-        if (!res.ok) return;
+    try {
+      const res = await fetch(apiUrl('/api/assets/manifest'), {
+        credentials: 'include',
+      });
+      if (res.ok) {
         const data = await res.json();
-        if (!data?.entries || !Array.isArray(data.entries)) return;
-        const entries: any[] = data.entries;
-        const mapped: AssetItem[] = entries.map((e) => ({
-          id: `asset_${encodeURIComponent(e.key)}`,
-          kind: e.key.endsWith('.glb') || e.key.endsWith('.gltf') ? 'model' : 'image',
-          url: e.url,
-          label: e.key.split('/').pop() || e.key,
-          createdAt: e.lastModified ? new Date(e.lastModified).getTime() : Date.now(),
-          projectId: '',
-          projectName: '',
-        }));
-
-        // Merge with existing cached items: prefer cached items (local edits), add new ones
-        const existing = (get().items || []) as any[];
-        const existingKeys = new Set(existing.map((x) => x.url || x.id));
-        const toAdd = mapped.filter((m) => !existingKeys.has(m.url));
-        if (toAdd.length) {
-          for (const a of toAdd) {
-            try {
+        if (data?.entries && Array.isArray(data.entries)) {
+          const entries: {
+            key?: string;
+            url?: string;
+            lastModified?: string;
+          }[] = data.entries;
+          const mapped: AssetItem[] = entries.map((e) => {
+            const key = String(e.key || '');
+            const lower = key.toLowerCase();
+            return {
+              id: `asset_${encodeURIComponent(key)}`,
+              kind:
+                lower.endsWith('.glb') || lower.endsWith('.gltf')
+                  ? 'model'
+                  : 'image',
+              url: String(e.url || ''),
+              label: key.split('/').pop() || key,
+              createdAt: e.lastModified
+                ? new Date(e.lastModified).getTime()
+                : Date.now(),
+              projectId: '',
+              projectName: '',
+            };
+          });
+          const existing = get().items || [];
+          const serverUrls = new Set(mapped.map((x) => x.url).filter(Boolean));
+          const localOnly = existing.filter((x) => !serverUrls.has(x.url));
+          const all = [...mapped, ...localOnly].sort(
+            (a, b) => b.createdAt - a.createdAt,
+          );
+          set({ items: all, remoteCounts: null });
+          try {
+            const db = await openDb();
+            const tx = db.transaction(STORE, 'readwrite');
+            const os = tx.objectStore(STORE);
+            const req = os.clear();
+            await new Promise((r, rej) => {
+              req.onsuccess = () => r(undefined);
+              req.onerror = () => rej(req.error);
+            });
+            for (const a of all) {
               await idbPut(a);
-            } catch (e) {
-              // ignore
             }
+          } catch {
+            /* ignore idb sync errors */
           }
-          const all = [...toAdd, ...existing].sort((a, b) => b.createdAt - a.createdAt);
-          set({ items: all });
         }
-      } catch (e) {
-        // ignore network errors
       }
-    })();
+    } catch {
+      /* ignore network errors */
+    }
   },
 
   counts: () => {
+    const remote = get().remoteCounts;
+    if (remote) return { ...remote };
     const items = get().items;
     return {
       image: items.filter((x) => x.kind === 'image').length,
@@ -196,12 +221,18 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     };
   },
 
-  addImageAsset: async (input) => {
+  addImageAsset: async (input, opts) => {
     if (!get().loaded) await get().load();
     const existing = get().items.find(
       (x) => x.kind === 'image' && (x.id === input.id || x.url === input.url),
     );
     if (existing) return existing;
+
+    if (!opts?.skipQuota) {
+      const lim = get().limits();
+      const c = get().counts();
+      if (c.image >= lim.image) return null;
+    }
 
     const item: AssetItem = {
       id: input.id || uid('img'),
@@ -214,25 +245,31 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       prompt: input.prompt,
     };
 
-    let next = [item, ...get().items];
-    const { kept, removedIds } = pruneOldest(next, 'image', caps().image);
-    next = kept;
+    const next = [item, ...get().items];
     try {
       await idbPut(item);
-      if (removedIds.length) await idbDelete(removedIds);
     } catch (err) {
       console.error('[assets] save image failed', err);
     }
-    set({ items: next.sort((a, b) => b.createdAt - a.createdAt) });
+    set({
+      items: next.sort((a, b) => b.createdAt - a.createdAt),
+      remoteCounts: null,
+    });
     return item;
   },
 
-  addModelAsset: async (input) => {
+  addModelAsset: async (input, opts) => {
     if (!get().loaded) await get().load();
     const existing = get().items.find(
       (x) => x.kind === 'model' && (x.id === input.id || x.url === input.url),
     );
     if (existing) return existing;
+
+    if (!opts?.skipQuota) {
+      const lim = get().limits();
+      const c = get().counts();
+      if (c.model >= lim.model) return null;
+    }
 
     const item: AssetItem = {
       id: input.id || uid('mdl'),
@@ -244,16 +281,16 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       projectName: input.projectName,
     };
 
-    let next = [item, ...get().items];
-    const { kept, removedIds } = pruneOldest(next, 'model', caps().model);
-    next = kept;
+    const next = [item, ...get().items];
     try {
       await idbPut(item);
-      if (removedIds.length) await idbDelete(removedIds);
     } catch (err) {
       console.error('[assets] save model failed', err);
     }
-    set({ items: next.sort((a, b) => b.createdAt - a.createdAt) });
+    set({
+      items: next.sort((a, b) => b.createdAt - a.createdAt),
+      remoteCounts: null,
+    });
     return item;
   },
 
@@ -267,7 +304,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     } catch (err) {
       console.error('[assets] delete failed', err);
     }
-    set({ items: next });
+    set({ items: next, remoteCounts: null });
     return removed;
   },
 
@@ -286,7 +323,6 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     set({
       items: get().items.map((x) => (x.id === id ? updated : x)),
     });
-    // Keep image workbench result labels in sync when ids match.
     void import('../image/useImageStore').then(({ useImageStore }) => {
       try {
         useImageStore.getState().renameSavedImage(id, nextLabel);
@@ -346,7 +382,7 @@ function isAssetableUrl(url: string | null | undefined): url is string {
 
 /**
  * 云端/切换项目时：改图袋里有图，但资产库是本机 IndexedDB，不会自动带上。
- * 把项目袋中的图片/模型补登记到资产（按 url 去重）。
+ * 把项目袋中的图片/模型补登记到资产（按 url 去重）；达上限则停止继续登记。
  */
 export async function syncProjectBagToAssets(
   bag: {
@@ -436,11 +472,12 @@ export async function syncProjectBagToAssets(
   }
 
   for (const c of candidates) {
-    await store.addImageAsset({
+    const added = await store.addImageAsset({
       ...c,
       projectId,
       projectName,
     });
+    if (!added && store.counts().image >= store.limits().image) break;
   }
 
   const modelUrl = bag.model?.meshyModelUrl;

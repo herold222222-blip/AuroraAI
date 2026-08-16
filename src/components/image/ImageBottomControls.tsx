@@ -28,6 +28,11 @@ import {
   PromptRefZone,
   RefImageLightbox,
 } from './PromptRefAttach';
+import { useAssetStore } from '../../store/useAssetStore';
+import {
+  ensureCanUploadImage,
+  MSG_IMAGE_CAP,
+} from '../../store/assetQuota';
 import {
   IMAGE_EDIT_MODELS,
   type ImageEditModelId,
@@ -155,6 +160,8 @@ export function ImageBottomControls() {
       pushToast('请输入提示词或选择预设', 'info');
       return;
     }
+    const { ensureCanEditImage } = await import('../../store/assetQuota');
+    if (!(await ensureCanEditImage())) return;
     setBusy(true);
     try {
       const trimmed = p.trim();
@@ -1031,8 +1038,23 @@ function StylePane({
               <button
                 type="button"
                 className="btn ghost sm"
-                disabled={busy || saving || refs.length >= MAX_STYLE_REFS}
-                onClick={() => fileRef.current?.click()}
+                disabled={
+                  busy ||
+                  saving ||
+                  refs.length >= MAX_STYLE_REFS ||
+                  useAssetStore.getState().counts().image >=
+                    useAssetStore.getState().limits().image
+                }
+                title={
+                  useAssetStore.getState().counts().image >=
+                  useAssetStore.getState().limits().image
+                    ? MSG_IMAGE_CAP
+                    : undefined
+                }
+                onClick={async () => {
+                  if (!(await ensureCanUploadImage())) return;
+                  fileRef.current?.click();
+                }}
               >
                 {saving
                   ? '上传中…'

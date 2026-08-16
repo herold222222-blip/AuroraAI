@@ -164,7 +164,15 @@ export function AssetsPanel() {
   const [preview, setPreview] = useState<AssetItem | null>(null);
 
   useEffect(() => {
-    void load();
+    void (async () => {
+      await load();
+      try {
+        const { refreshAssetCounts } = await import('../../store/assetQuota');
+        await refreshAssetCounts();
+      } catch {
+        /* ignore */
+      }
+    })();
   }, [load]);
 
   // Sync with top-menu project list; keep orphan asset project ids if any.

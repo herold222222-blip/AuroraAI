@@ -138,6 +138,17 @@ export async function runAiEdit(opts: {
       ? opts.materialRefs
       : state.selectedMaterialUrls();
 
+  // Enforce asset limits: at image cap → cannot edit (creates new result asset)
+  const {
+    refreshAssetCounts,
+    isImageAtCap,
+    MSG_IMAGE_CAP,
+  } = await import('../store/assetQuota');
+  const counts = await refreshAssetCounts();
+  if (isImageAtCap(counts)) {
+    throw new Error(MSG_IMAGE_CAP);
+  }
+
   const overrideHotspot =
     opts.hotspot !== undefined ? opts.hotspot : null;
   const useStoreHotspot =

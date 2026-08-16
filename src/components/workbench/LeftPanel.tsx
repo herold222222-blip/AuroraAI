@@ -5,6 +5,8 @@ import { Check, Switch, Segmented } from '../common/Controls';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import type { FaceQuality } from '../../types';
+import { useAssetStore } from '../../store/useAssetStore';
+import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 
 const ACCEPT = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_SIZE = 20 * 1024 * 1024;
@@ -31,6 +33,7 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
   const build3D = useAppStore((s) => s.build3D);
   const pushToast = useAppStore((s) => s.pushToast);
   const openDownloadMenu = useImageDownloadMenu();
+  const imageAtCap = useAssetStore((s) => s.counts().image >= s.limits().image);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const [confirmClearImage, setConfirmClearImage] = useState(false);
@@ -38,7 +41,8 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
   /** Default off: rebuild with existing layers. */
   const [resegmentOnRebuild, setResegmentOnRebuild] = useState(false);
 
-  const acceptFile = (file: File, replacing: boolean) => {
+  const acceptFile = async (file: File, replacing: boolean) => {
+    if (!(await ensureCanUploadImage())) return;
     if (!ACCEPT.includes(file.type)) {
       pushToast('仅支持 JPG / PNG / WEBP 格式图片', 'error');
       return;
@@ -72,7 +76,14 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
                 }
               />
               <div className="thumb-mask">
-                <button onClick={() => inputRef.current?.click()}>
+                <button
+                  disabled={imageAtCap}
+                  title={imageAtCap ? MSG_IMAGE_CAP : undefined}
+                  onClick={async () => {
+                    if (!(await ensureCanUploadImage())) return;
+                    inputRef.current?.click();
+                  }}
+                >
                   重新上传
                 </button>
                 <button onClick={() => setConfirmClearImage(true)}>
@@ -83,21 +94,26 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
           ) : (
             <div
               className={`mini-upload${drag ? ' drag' : ''}`}
-              onClick={() => inputRef.current?.click()}
+              onClick={async () => {
+                if (!(await ensureCanUploadImage())) return;
+                inputRef.current?.click();
+              }}
               onDragOver={(e) => {
                 e.preventDefault();
-                setDrag(true);
+                if (!imageAtCap) setDrag(true);
               }}
               onDragLeave={() => setDrag(false)}
               onDrop={(e) => {
                 e.preventDefault();
                 setDrag(false);
                 const f = e.dataTransfer.files?.[0];
-                if (f) acceptFile(f, false);
+                if (f) void acceptFile(f, false);
               }}
             >
               <div style={{ fontSize: 20 }}>⬆</div>
-              <div>点击或拖拽上传新图片</div>
+              <div>
+                {imageAtCap ? '图片资产已达上限' : '点击或拖拽上传新图片'}
+              </div>
             </div>
           )}
           <input
@@ -105,9 +121,10 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
             type="file"
             accept=".jpg,.jpeg,.png,.webp"
             hidden
+            disabled={imageAtCap}
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) acceptFile(f, !!image);
+              if (f) void acceptFile(f, !!image);
               e.target.value = '';
             }}
           />

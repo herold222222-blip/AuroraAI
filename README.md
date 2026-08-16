@@ -116,3 +116,9 @@ src/
 ## MVP 边界（不包含）
 
 项目列表 / 资产库 / 项目全生命周期管理、深度材质精细微调、云端分享与多人协作、批量上传批量生成。
+
+
+cd /var/www/AuroraAI
+git pull   # 先提交推送后再 pull
+sudo systemctl restart aurora-api
+pnpm build

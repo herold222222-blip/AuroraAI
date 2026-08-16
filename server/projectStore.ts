@@ -295,8 +295,8 @@ export async function saveFormalProject(input: {
 }): Promise<{ key: string; version: number }> {
   await ensureProjectsSchema();
   const { ownerId, projectId, name } = input;
-  if (!projectId || projectId.startsWith('proj_scratch')) {
-    throw new Error('未立项空间不会保存到云端');
+  if (!projectId) {
+    throw new Error('projectId 必需');
   }
   const existing = await getProjectRow(projectId);
   if (existing && existing.ownerId !== ownerId) {
