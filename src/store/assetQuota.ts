@@ -7,6 +7,7 @@ import {
 } from './assetCaps';
 import { useAssetStore } from './useAssetStore';
 import { useAppStore } from './useAppStore';
+import { useAuthStore } from './useAuthStore';
 
 export {
   USER_IMAGE_CAP,
@@ -16,29 +17,36 @@ export {
 } from './assetCaps';
 export type { AssetCounts, AssetLimits } from './assetCaps';
 
-/** 拉取服务端轻量计数并刷新本地资产列表，返回最新 counts */
+/** 从数据库刷新资产并返回 counts */
 export async function refreshAssetCounts(): Promise<AssetCounts> {
   const store = useAssetStore.getState();
+  const token = useAuthStore.getState().token;
+  if (!token) {
+    store.clear();
+    return { image: 0, model: 0 };
+  }
   try {
     await store.load();
   } catch {
-    /* keep cached */
+    /* keep previous */
   }
   try {
     const res = await fetch(apiUrl('/api/assets/counts'), {
+      headers: { Authorization: `Bearer ${token}` },
       credentials: 'include',
     });
     if (res.ok) {
       const data = (await res.json()) as {
         ok?: boolean;
         counts?: AssetCounts;
+        source?: string;
       };
-      if (data?.counts) {
+      if (data?.counts && data.source === 'database') {
         store.applyRemoteCounts(data.counts);
       }
     }
   } catch {
-    /* ignore network */
+    /* ignore */
   }
   return store.counts();
 }
@@ -69,7 +77,6 @@ function toast(msg: string) {
   useAppStore.getState().pushToast(msg, 'info');
 }
 
-/** 上传新图 / 导入原图前：刷新计数，超限则提示并返回 false */
 export async function ensureCanUploadImage(): Promise<boolean> {
   const counts = await refreshAssetCounts();
   if (isImageAtCap(counts)) {
@@ -79,7 +86,6 @@ export async function ensureCanUploadImage(): Promise<boolean> {
   return true;
 }
 
-/** AI 改图前：刷新计数，超限则提示并返回 false */
 export async function ensureCanEditImage(): Promise<boolean> {
   const counts = await refreshAssetCounts();
   if (isImageAtCap(counts)) {
@@ -89,7 +95,6 @@ export async function ensureCanEditImage(): Promise<boolean> {
   return true;
 }
 
-/** 图生模型前：刷新计数，超限则提示并返回 false */
 export async function ensureCanAddModel(): Promise<boolean> {
   const counts = await refreshAssetCounts();
   if (isModelAtCap(counts)) {

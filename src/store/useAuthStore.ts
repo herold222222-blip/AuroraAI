@@ -227,6 +227,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     void import('./useAppStore').then((m) =>
       m.useAppStore.getState().resetFormalProjects(),
     );
+    void import('./useAssetStore').then((m) => m.useAssetStore.getState().clear());
   },
 
   requireAuth: () => {

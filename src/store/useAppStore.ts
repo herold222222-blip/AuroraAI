@@ -473,13 +473,9 @@ export const useAppStore = create<AppState>((set, get) => {
       pendingBuildAfterAnalysis: false,
     });
     useImageStore.getState().importBag(bag.image);
-    // 改图区来自项目袋；资产库是本机 IndexedDB，云端恢复后需补登记
-    void import('./useAssetStore').then(({ syncProjectBagToAssets }) => {
-      void syncProjectBagToAssets(
-        bag,
-        get().activeProjectId,
-        projectName,
-      );
+    // 资产一律从数据库刷新，不再从 IndexedDB / OSS 清单拼装
+    void import('./useAssetStore').then(({ reloadAssetsFromDatabase }) => {
+      void reloadAssetsFromDatabase();
     });
   };
 
@@ -1266,10 +1262,10 @@ export const useAppStore = create<AppState>((set, get) => {
         projectBags.set(get().activeProjectId, captureBag());
         for (const p of remotes) {
           projectBags.set(p.id, p.bag);
-          void import('./useAssetStore').then(({ syncProjectBagToAssets }) => {
-            void syncProjectBagToAssets(p.bag, p.id, p.name);
-          });
         }
+        void import('./useAssetStore').then(({ reloadAssetsFromDatabase }) => {
+          void reloadAssetsFromDatabase();
+        });
         const remoteIds = new Set(remotes.map((p) => p.id));
         const keepLocal = get().projects.filter(
           (p) => !isScratchProjectId(p.id) && !remoteIds.has(p.id),

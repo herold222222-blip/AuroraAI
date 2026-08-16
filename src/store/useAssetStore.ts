@@ -20,65 +20,8 @@ export interface AssetItem {
   prompt?: string;
 }
 
-const DB_NAME = 'aurora-assets';
-const DB_VERSION = 1;
-const STORE = 'items';
-
 function uid(prefix = 'asset'): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        const os = db.createObjectStore(STORE, { keyPath: 'id' });
-        os.createIndex('kind', 'kind', { unique: false });
-        os.createIndex('createdAt', 'createdAt', { unique: false });
-        os.createIndex('projectId', 'projectId', { unique: false });
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
-  });
-}
-
-async function idbGetAll(): Promise<AssetItem[]> {
-  try {
-    const db = await openDb();
-    return await new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readonly');
-      const req = tx.objectStore(STORE).getAll();
-      req.onsuccess = () => resolve((req.result || []) as AssetItem[]);
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    return [];
-  }
-}
-
-async function idbPut(item: AssetItem): Promise<void> {
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(item);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function idbDelete(ids: string[]): Promise<void> {
-  if (!ids.length) return;
-  const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    const os = tx.objectStore(STORE);
-    for (const id of ids) os.delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
 }
 
 function caps() {
@@ -92,9 +35,11 @@ function caps() {
 interface AssetState {
   items: AssetItem[];
   loaded: boolean;
-  /** 服务端 counts 覆盖（有则优先于本地 items 统计） */
+  loading: boolean;
   remoteCounts: AssetCounts | null;
-  load: () => Promise<void>;
+  /** 仅从数据库 /api/assets 拉取；切换项目/用户时调用 */
+  load: (opts?: { projectId?: string }) => Promise<void>;
+  clear: () => void;
   applyRemoteCounts: (counts: AssetCounts) => void;
   addImageAsset: (
     input: {
@@ -128,6 +73,7 @@ interface AssetState {
 export const useAssetStore = create<AssetState>((set, get) => ({
   items: [],
   loaded: false,
+  loading: false,
   remoteCounts: null,
 
   applyRemoteCounts: (counts) => {
@@ -139,67 +85,67 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     });
   },
 
-  load: async () => {
-    const cached = await idbGetAll();
-    cached.sort((a, b) => b.createdAt - a.createdAt);
-    set({ items: cached, loaded: true });
+  clear: () => {
+    set({ items: [], loaded: true, loading: false, remoteCounts: null });
+  },
 
+  load: async (opts) => {
+    const token = useAuthStore.getState().token;
+    if (!token) {
+      set({ items: [], loaded: true, loading: false, remoteCounts: null });
+      return;
+    }
+    set({ loading: true });
     try {
-      const res = await fetch(apiUrl('/api/assets/manifest'), {
+      const q = opts?.projectId
+        ? `?projectId=${encodeURIComponent(opts.projectId)}`
+        : '';
+      const res = await fetch(apiUrl(`/api/assets${q}`), {
+        headers: { Authorization: `Bearer ${token}` },
         credentials: 'include',
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.entries && Array.isArray(data.entries)) {
-          const entries: {
-            key?: string;
-            url?: string;
-            lastModified?: string;
-          }[] = data.entries;
-          const mapped: AssetItem[] = entries.map((e) => {
-            const key = String(e.key || '');
-            const lower = key.toLowerCase();
-            return {
-              id: `asset_${encodeURIComponent(key)}`,
-              kind:
-                lower.endsWith('.glb') || lower.endsWith('.gltf')
-                  ? 'model'
-                  : 'image',
-              url: String(e.url || ''),
-              label: key.split('/').pop() || key,
-              createdAt: e.lastModified
-                ? new Date(e.lastModified).getTime()
-                : Date.now(),
-              projectId: '',
-              projectName: '',
-            };
-          });
-          const existing = get().items || [];
-          const serverUrls = new Set(mapped.map((x) => x.url).filter(Boolean));
-          const localOnly = existing.filter((x) => !serverUrls.has(x.url));
-          const all = [...mapped, ...localOnly].sort(
-            (a, b) => b.createdAt - a.createdAt,
-          );
-          set({ items: all, remoteCounts: null });
-          try {
-            const db = await openDb();
-            const tx = db.transaction(STORE, 'readwrite');
-            const os = tx.objectStore(STORE);
-            const req = os.clear();
-            await new Promise((r, rej) => {
-              req.onsuccess = () => r(undefined);
-              req.onerror = () => rej(req.error);
-            });
-            for (const a of all) {
-              await idbPut(a);
-            }
-          } catch {
-            /* ignore idb sync errors */
-          }
-        }
+      if (res.status === 401) {
+        set({ items: [], loaded: true, loading: false, remoteCounts: null });
+        return;
       }
-    } catch {
-      /* ignore network errors */
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(
+          (err as { error?: string }).error || `资产加载失败（${res.status}）`,
+        );
+      }
+      const data = (await res.json()) as {
+        entries?: AssetItem[];
+        counts?: AssetCounts;
+      };
+      const entries = Array.isArray(data.entries) ? data.entries : [];
+      const items: AssetItem[] = entries
+        .map((e): AssetItem => ({
+          id: String(e.id || uid(e.kind === 'model' ? 'mdl' : 'img')),
+          kind: e.kind === 'model' ? ('model' as const) : ('image' as const),
+          url: String(e.url || ''),
+          label: String(e.label || ''),
+          createdAt: Number(e.createdAt) || Date.now(),
+          projectId: String(e.projectId || ''),
+          projectName: String(e.projectName || ''),
+          prompt: e.prompt ? String(e.prompt) : undefined,
+        }))
+        .filter((x) => x.url)
+        .sort((a, b) => b.createdAt - a.createdAt);
+      set({
+        items,
+        loaded: true,
+        loading: false,
+        remoteCounts: data.counts
+          ? {
+              image: Number(data.counts.image) || 0,
+              model: Number(data.counts.model) || 0,
+            }
+          : null,
+      });
+    } catch (e) {
+      console.error('[assets] load from db', e);
+      set({ loaded: true, loading: false });
     }
   },
 
@@ -245,14 +191,8 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       prompt: input.prompt,
     };
 
-    const next = [item, ...get().items];
-    try {
-      await idbPut(item);
-    } catch (err) {
-      console.error('[assets] save image failed', err);
-    }
     set({
-      items: next.sort((a, b) => b.createdAt - a.createdAt),
+      items: [item, ...get().items].sort((a, b) => b.createdAt - a.createdAt),
       remoteCounts: null,
     });
     return item;
@@ -281,14 +221,8 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       projectName: input.projectName,
     };
 
-    const next = [item, ...get().items];
-    try {
-      await idbPut(item);
-    } catch (err) {
-      console.error('[assets] save model failed', err);
-    }
     set({
-      items: next.sort((a, b) => b.createdAt - a.createdAt),
+      items: [item, ...get().items].sort((a, b) => b.createdAt - a.createdAt),
       remoteCounts: null,
     });
     return item;
@@ -299,11 +233,6 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     const idSet = new Set(ids);
     const removed = get().items.filter((x) => idSet.has(x.id));
     const next = get().items.filter((x) => !idSet.has(x.id));
-    try {
-      await idbDelete(ids);
-    } catch (err) {
-      console.error('[assets] delete failed', err);
-    }
     set({ items: next, remoteCounts: null });
     return removed;
   },
@@ -314,12 +243,6 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     const item = get().items.find((x) => x.id === id);
     if (!item || item.label === nextLabel) return false;
     const updated: AssetItem = { ...item, label: nextLabel };
-    try {
-      await idbPut(updated);
-    } catch (err) {
-      console.error('[assets] rename failed', err);
-      return false;
-    }
     set({
       items: get().items.map((x) => (x.id === id ? updated : x)),
     });
@@ -333,6 +256,13 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     return true;
   },
 }));
+
+/** 登录/切用户/切项目后：强制从数据库刷新资产 */
+export async function reloadAssetsFromDatabase(opts?: {
+  projectId?: string;
+}) {
+  await useAssetStore.getState().load(opts);
+}
 
 /** Fire-and-forget helper used from image/model stores. */
 export function registerGeneratedImage(input: {
@@ -368,125 +298,13 @@ export function registerGeneratedModel(input: {
   });
 }
 
-function isAssetableUrl(url: string | null | undefined): url is string {
-  if (!url) return false;
-  if (url.startsWith('blob:')) return false;
-  if (url.startsWith('asset:')) return false;
-  if (url.startsWith('oss:')) return false;
-  return (
-    url.startsWith('data:') ||
-    url.startsWith('http://') ||
-    url.startsWith('https://')
-  );
-}
-
 /**
- * 云端/切换项目时：改图袋里有图，但资产库是本机 IndexedDB，不会自动带上。
- * 把项目袋中的图片/模型补登记到资产（按 url 去重）；达上限则停止继续登记。
+ * @deprecated 资产以数据库为准；保留空实现以免旧调用报错。
  */
 export async function syncProjectBagToAssets(
-  bag: {
-    image: {
-      originalUrl?: string | null;
-      currentUrl?: string | null;
-      materials?: { id: string; url: string }[];
-      savedImages?: {
-        id: string;
-        url: string;
-        label: string;
-        createdAt: number;
-        prompt?: string;
-      }[];
-      sourceAlbums?: {
-        id: string;
-        url: string;
-        label: string;
-        createdAt: number;
-        results?: {
-          id: string;
-          url: string;
-          label: string;
-          createdAt: number;
-          prompt?: string;
-        }[];
-      }[];
-    };
-    model: { meshyModelUrl?: string | null };
-  },
-  projectId: string,
-  projectName: string,
+  _bag: unknown,
+  _projectId: string,
+  _projectName: string,
 ) {
-  const store = useAssetStore.getState();
-  if (!store.loaded) await store.load();
-
-  type Cand = {
-    id?: string;
-    url: string;
-    label: string;
-    createdAt?: number;
-    prompt?: string;
-  };
-  const candidates: Cand[] = [];
-  const seen = new Set(
-    store.items.filter((x) => x.kind === 'image').map((x) => x.url),
-  );
-
-  const push = (c: Cand) => {
-    if (!isAssetableUrl(c.url)) return;
-    if (seen.has(c.url)) return;
-    seen.add(c.url);
-    candidates.push(c);
-  };
-
-  const img = bag.image;
-  for (const s of img.savedImages || []) {
-    push({
-      id: s.id,
-      url: s.url,
-      label: s.label || '结果',
-      createdAt: s.createdAt,
-      prompt: s.prompt,
-    });
-  }
-  for (const a of img.sourceAlbums || []) {
-    push({
-      id: a.id,
-      url: a.url,
-      label: a.label || '原图',
-      createdAt: a.createdAt,
-    });
-    for (const r of a.results || []) {
-      push({
-        id: r.id,
-        url: r.url,
-        label: r.label || '结果',
-        createdAt: r.createdAt,
-        prompt: r.prompt,
-      });
-    }
-  }
-  push({ url: img.originalUrl || '', label: '原图' });
-  push({ url: img.currentUrl || '', label: '当前图' });
-  for (const m of img.materials || []) {
-    push({ id: m.id, url: m.url, label: '素材' });
-  }
-
-  for (const c of candidates) {
-    const added = await store.addImageAsset({
-      ...c,
-      projectId,
-      projectName,
-    });
-    if (!added && store.counts().image >= store.limits().image) break;
-  }
-
-  const modelUrl = bag.model?.meshyModelUrl;
-  if (isAssetableUrl(modelUrl)) {
-    await store.addModelAsset({
-      url: modelUrl,
-      label: `${projectName || '项目'} · 3D`,
-      projectId,
-      projectName,
-    });
-  }
+  await reloadAssetsFromDatabase();
 }

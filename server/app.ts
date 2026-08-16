@@ -206,7 +206,11 @@ export function createApiApp() {
     return handleDeleteProject(req, res);
   });
 
-  // Assets manifest (OSS)
+  // Assets：仅从数据库 projects 聚合（需登录）
+  app.get('/api/assets', async (req, res) => {
+    const { handleListAssets } = await import('./assetHandlers');
+    return handleListAssets(req, res);
+  });
   app.get('/api/assets/manifest', async (req, res) => {
     const { handleListAssets } = await import('./assetHandlers');
     return handleListAssets(req, res);

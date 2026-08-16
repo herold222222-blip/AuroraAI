@@ -77,9 +77,12 @@ export function ImageRightSidebar() {
   const lastClickedIdRef = useRef<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // asset counts and limits (kept reactive)
-  const assetCounts = useAssetStore((s) => s.counts());
-  const assetLimits = useAssetStore((s) => s.limits());
+  const imageCount = useAssetStore((s) => s.counts().image);
+  const modelCount = useAssetStore((s) => s.counts().model);
+  const imageLimit = useAssetStore((s) => s.limits().image);
+  const modelLimit = useAssetStore((s) => s.limits().model);
+  const assetCounts = { image: imageCount, model: modelCount };
+  const assetLimits = { image: imageLimit, model: modelLimit };
 
   const activeAlbum = sourceAlbums.find((a) => a.id === activeSourceId);
   const fromSnapshot =

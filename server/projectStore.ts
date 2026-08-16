@@ -421,6 +421,150 @@ export async function deleteProject(ownerId: string, projectId: string) {
   return true;
 }
 
+export type ListedAsset = {
+  id: string;
+  kind: 'image' | 'model';
+  url: string;
+  label: string;
+  createdAt: number;
+  projectId: string;
+  projectName: string;
+  prompt?: string;
+};
+
+function isListableAssetUrl(url: string): boolean {
+  if (!url) return false;
+  if (url.startsWith('blob:') || url.startsWith('asset:')) return false;
+  return (
+    url.startsWith('data:') ||
+    url.startsWith('http://') ||
+    url.startsWith('https://') ||
+    url.startsWith('oss:')
+  );
+}
+
+/** 从项目 bag 提取图片/模型资产（已解析 URL） */
+function collectAssetsFromBag(
+  bag: unknown,
+  projectId: string,
+  projectName: string,
+): ListedAsset[] {
+  const out: ListedAsset[] = [];
+  const seen = new Set<string>();
+  const push = (
+    kind: 'image' | 'model',
+    url: string,
+    label: string,
+    createdAt?: number,
+    id?: string,
+    prompt?: string,
+  ) => {
+    if (!isListableAssetUrl(url)) return;
+    const key = `${kind}:${url}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      id: id || `${kind}_${projectId}_${out.length}`,
+      kind,
+      url,
+      label: label || (kind === 'image' ? '图片' : '模型'),
+      createdAt: createdAt && createdAt > 0 ? createdAt : Date.now(),
+      projectId,
+      projectName,
+      prompt,
+    });
+  };
+
+  const root = (bag || {}) as Record<string, unknown>;
+  const image = (root.image || {}) as Record<string, unknown>;
+  const model = (root.model || {}) as Record<string, unknown>;
+
+  for (const s of (image.savedImages as Array<Record<string, unknown>>) || []) {
+    push(
+      'image',
+      String(s.url || ''),
+      String(s.label || '结果'),
+      Number(s.createdAt) || undefined,
+      s.id ? String(s.id) : undefined,
+      s.prompt ? String(s.prompt) : undefined,
+    );
+  }
+  for (const a of (image.sourceAlbums as Array<Record<string, unknown>>) || []) {
+    push(
+      'image',
+      String(a.url || ''),
+      String(a.label || '原图'),
+      Number(a.createdAt) || undefined,
+      a.id ? String(a.id) : undefined,
+    );
+    for (const r of (a.results as Array<Record<string, unknown>>) || []) {
+      push(
+        'image',
+        String(r.url || ''),
+        String(r.label || '结果'),
+        Number(r.createdAt) || undefined,
+        r.id ? String(r.id) : undefined,
+        r.prompt ? String(r.prompt) : undefined,
+      );
+    }
+  }
+  push('image', String(image.originalUrl || ''), '原图');
+  push('image', String(image.currentUrl || ''), '当前图');
+  for (const m of (image.materials as Array<Record<string, unknown>>) || []) {
+    push(
+      'image',
+      String(m.url || ''),
+      '素材',
+      undefined,
+      m.id ? String(m.id) : undefined,
+    );
+  }
+
+  const modelImg = model.image as { url?: string } | null | undefined;
+  if (modelImg?.url) push('image', String(modelImg.url), '模型原图');
+  for (const snap of (model.snapshots as Array<Record<string, unknown>>) || []) {
+    push(
+      'image',
+      String(snap.url || ''),
+      String(snap.label || snap.name || '快照'),
+      Number(snap.createdAt) || undefined,
+      snap.id ? String(snap.id) : undefined,
+    );
+  }
+  push(
+    'model',
+    String(model.meshyModelUrl || ''),
+    `${projectName || '项目'} · 3D`,
+  );
+
+  return out;
+}
+
+/** 当前用户在 Postgres projects 中的全部（或指定）项目资产 */
+export async function listAssetsForOwner(
+  ownerId: string,
+  opts?: ResolveUrlOptions & { projectId?: string },
+): Promise<ListedAsset[]> {
+  const rows = await listProjectsByOwner(ownerId);
+  const projectId = opts?.projectId?.trim();
+  const filtered = projectId
+    ? rows.filter((r) => r.id === projectId)
+    : rows;
+  const out: ListedAsset[] = [];
+  const seen = new Set<string>();
+  for (const row of filtered) {
+    const bag = await bagWithResolvedUrls(extractBag(row.manifest), opts);
+    for (const item of collectAssetsFromBag(bag, row.id, row.name)) {
+      const key = `${item.kind}:${item.url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+    }
+  }
+  out.sort((a, b) => b.createdAt - a.createdAt);
+  return out;
+}
+
 export default {
   saveProjectArchive,
   saveFormalProject,
@@ -429,4 +573,5 @@ export default {
   listProjectsByOwner,
   listResolvedProjects,
   deleteProject,
+  listAssetsForOwner,
 };

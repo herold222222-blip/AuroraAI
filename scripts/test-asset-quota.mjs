@@ -41,7 +41,7 @@ function simulateBlock(counts, limits) {
 async function main() {
   console.log('[quota-e2e] API_ORIGIN =', ORIGIN);
 
-  // --- 1) counts 接口 ---
+  // --- 1) counts 接口（需登录；未登录应 401）---
   const res = await fetch(`${ORIGIN}/api/assets/counts`);
   const text = await res.text();
   let data;
@@ -50,21 +50,25 @@ async function main() {
   } catch {
     throw new Error(`counts 非 JSON: HTTP ${res.status} ${text.slice(0, 200)}`);
   }
-  assert(res.ok, `counts HTTP ${res.status}: ${text.slice(0, 200)}`);
-  assert(data.ok === true, 'counts.ok !== true');
-  assert(data.counts && typeof data.counts.image === 'number', '缺少 counts.image');
-  assert(data.counts && typeof data.counts.model === 'number', '缺少 counts.model');
-
-  const limits = data.limits || { image: EXPECT_IMAGE_LIMIT, model: EXPECT_MODEL_LIMIT };
-  assert(
-    Number(limits.image) === EXPECT_IMAGE_LIMIT,
-    `limits.image 期望 ${EXPECT_IMAGE_LIMIT} 实际 ${limits.image}`,
-  );
-  assert(
-    Number(limits.model) === EXPECT_MODEL_LIMIT,
-    `limits.model 期望 ${EXPECT_MODEL_LIMIT} 实际 ${limits.model}`,
-  );
-  console.log('[quota-e2e] counts OK', data.counts, 'limits', limits);
+  if (res.status === 401) {
+    console.log('[quota-e2e] counts 未登录返回 401（符合「仅数据库+鉴权」）');
+  } else {
+    assert(res.ok, `counts HTTP ${res.status}: ${text.slice(0, 200)}`);
+    assert(data.ok === true, 'counts.ok !== true');
+    assert(data.source === 'database' || data.counts, '应来自 database');
+    assert(data.counts && typeof data.counts.image === 'number', '缺少 counts.image');
+    assert(data.counts && typeof data.counts.model === 'number', '缺少 counts.model');
+    const limits = data.limits || { image: EXPECT_IMAGE_LIMIT, model: EXPECT_MODEL_LIMIT };
+    assert(
+      Number(limits.image) === EXPECT_IMAGE_LIMIT,
+      `limits.image 期望 ${EXPECT_IMAGE_LIMIT} 实际 ${limits.image}`,
+    );
+    assert(
+      Number(limits.model) === EXPECT_MODEL_LIMIT,
+      `limits.model 期望 ${EXPECT_MODEL_LIMIT} 实际 ${limits.model}`,
+    );
+    console.log('[quota-e2e] counts OK', data.counts, 'limits', limits, 'source', data.source);
+  }
 
   // --- 2) 文案 ---
   assert(MSG_IMAGE.includes('上限') && MSG_IMAGE.includes('20'), '图片提示文案异常');
@@ -72,6 +76,7 @@ async function main() {
   console.log('[quota-e2e] toast copy OK');
 
   // --- 3) 边界模拟 ---
+  const limits = { image: EXPECT_IMAGE_LIMIT, model: EXPECT_MODEL_LIMIT };
   const under = simulateBlock(
     { image: EXPECT_IMAGE_LIMIT - 1, model: EXPECT_MODEL_LIMIT - 1 },
     limits,
