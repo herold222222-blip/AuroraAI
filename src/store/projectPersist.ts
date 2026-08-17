@@ -60,9 +60,11 @@ export function writeLastFormalProjectId(id: string | null) {
 function ossKeyFromUrl(url: string): string | null {
   if (url.startsWith('oss:')) return url.slice(4);
   try {
-    const u = new URL(url);
+    const u = new URL(url, window.location.origin);
     const path = decodeURIComponent(u.pathname.replace(/^\//, ''));
-    if (path.startsWith('projects/')) return path;
+    if (path.startsWith('projects/') || path.startsWith('assets/')) return path;
+    const key = decodeURIComponent(u.searchParams.get('key') || '').replace(/^\//, '');
+    if (key.startsWith('projects/') || key.startsWith('assets/')) return key;
   } catch {
     /* ignore */
   }
@@ -205,13 +207,12 @@ export async function buildProjectSavePayload(bag: ProjectBag): Promise<{
   return { bag: slimBag, assets };
 }
 
-export async function saveFormalProjectToCloud(input: {
+export async function saveProjectToCloud(input: {
   projectId: string;
   name: string;
   bag: ProjectBag;
   token: string;
 }) {
-  if (isScratchProjectId(input.projectId)) return;
   const payload = await buildProjectSavePayload(input.bag);
   return apiSaveProject(
     input.projectId,
@@ -242,10 +243,17 @@ export async function loadRemoteProjects(
 function rewriteOssUrlsForClient(bag: unknown, token: string): unknown {
   const walk = (value: unknown): unknown => {
     if (typeof value === 'string') {
+      if (value.startsWith('asset:')) {
+        return '';
+      }
       if (value.startsWith('oss:')) {
-        const key = value.slice(4);
+        const key = value.slice(4).trim().replace(/^\/+/, '');
+        if (!key || key.startsWith('asset_')) return '';
+        const mediaPath = key.startsWith('assets/')
+          ? '/api/assets/media'
+          : '/api/projects/media';
         return apiUrl(
-          `/api/projects/media?key=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`,
+          `${mediaPath}?key=${encodeURIComponent(key)}&t=${encodeURIComponent(token)}`,
         );
       }
       // 签名链常返回 http://bucket.oss-*.aliyuncs.com/...，在 https 页面会被浏览器直接拦截

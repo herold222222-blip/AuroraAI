@@ -10,6 +10,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 
 type KindFilter = 'all' | AssetKind;
 type SortMode = 'newest' | 'oldest' | 'project';
+const UNASSIGNED_PROJECT_ID = '__unassigned';
 
 /** Compact timestamp for card meta (date + HH:mm). */
 function formatTimeCompact(ts: number) {
@@ -137,6 +138,7 @@ function formatDayLabel(ts: number) {
 export function AssetsPanel() {
   const items = useAssetStore((s) => s.items);
   const loaded = useAssetStore((s) => s.loaded);
+  const loading = useAssetStore((s) => s.loading);
   const load = useAssetStore((s) => s.load);
   const removeAssets = useAssetStore((s) => s.removeAssets);
   const renameAsset = useAssetStore((s) => s.renameAsset);
@@ -173,6 +175,9 @@ export function AssetsPanel() {
     for (const p of projects) {
       map.set(p.id, p.name?.trim() || '未命名项目');
     }
+    if (items.some((it) => !it.projectId)) {
+      map.set(UNASSIGNED_PROJECT_ID, '未立项');
+    }
     for (const it of items) {
       if (!it.projectId || map.has(it.projectId)) continue;
       map.set(it.projectId, it.projectName?.trim() || '未命名项目');
@@ -188,7 +193,11 @@ export function AssetsPanel() {
   const filtered = useMemo(() => {
     let list = items.slice();
     if (kind !== 'all') list = list.filter((x) => x.kind === kind);
-    if (projectId !== 'all') list = list.filter((x) => x.projectId === projectId);
+    if (projectId === UNASSIGNED_PROJECT_ID) {
+      list = list.filter((x) => !x.projectId);
+    } else if (projectId !== 'all') {
+      list = list.filter((x) => x.projectId === projectId);
+    }
     if (sort === 'newest') list.sort((a, b) => b.createdAt - a.createdAt);
     else if (sort === 'oldest') list.sort((a, b) => a.createdAt - b.createdAt);
     else list.sort((a, b) => {
@@ -349,8 +358,8 @@ export function AssetsPanel() {
         </div>
       </div>
 
-      {!loaded ? (
-        <div className="assets-empty">正在加载资产…</div>
+      {loading || !loaded ? (
+        <div className="assets-empty">正在加载当前用户资产…</div>
       ) : filtered.length === 0 ? (
         <div className="assets-empty">
           {projectId !== 'all'
@@ -390,7 +399,19 @@ export function AssetsPanel() {
                   title={item.kind === 'image' ? '预览' : '打开模型'}
                 >
                   {item.kind === 'image' ? (
-                    <img src={item.url} alt={item.label} loading="lazy" />
+                    <img
+                      src={item.url}
+                      alt={item.label}
+                      loading="lazy"
+                      onError={(e) => {
+                        console.error('[assets] thumb load failed', {
+                          id: item.id,
+                          label: item.label,
+                          url: item.url,
+                        });
+                        (e.currentTarget as HTMLImageElement).style.opacity = '0.2';
+                      }}
+                    />
                   ) : (
                     <div className="assets-model-placeholder" aria-hidden>
                       <svg width="36" height="36" viewBox="0 0 24 24" fill="none">
@@ -426,12 +447,16 @@ export function AssetsPanel() {
                     <span className="assets-kind">
                       {item.kind === 'image' ? '图片' : '模型'}
                     </span>
-                    <span className="assets-meta-sep" aria-hidden>
-                      ·
-                    </span>
-                    <span className="assets-project" title={item.projectName || '未命名项目'}>
-                      {item.projectName || '未命名项目'}
-                    </span>
+                    {item.projectName && (
+                      <>
+                        <span className="assets-meta-sep" aria-hidden>
+                          ·
+                        </span>
+                        <span className="assets-project" title={item.projectName}>
+                          {item.projectName}
+                        </span>
+                      </>
+                    )}
                     <span className="assets-meta-sep" aria-hidden>
                       ·
                     </span>
@@ -482,7 +507,17 @@ export function AssetsPanel() {
               </button>
             </div>
             <div className="assets-preview-body">
-              <img src={preview.url} alt={preview.label} />
+              <img
+                src={preview.url}
+                alt={preview.label}
+                onError={() => {
+                  console.error('[assets] preview load failed', {
+                    id: preview.id,
+                    label: preview.label,
+                    url: preview.url,
+                  });
+                }}
+              />
             </div>
             <div className="assets-preview-actions">
               <button

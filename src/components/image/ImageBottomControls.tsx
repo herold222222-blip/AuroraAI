@@ -30,6 +30,7 @@ import {
 } from './PromptRefAttach';
 import { useAssetStore } from '../../store/useAssetStore';
 import {
+  ensureCanEditImage,
   ensureCanUploadImage,
   MSG_IMAGE_CAP,
 } from '../../store/assetQuota';
@@ -160,7 +161,6 @@ export function ImageBottomControls() {
       pushToast('请输入提示词或选择预设', 'info');
       return;
     }
-    const { ensureCanEditImage } = await import('../../store/assetQuota');
     if (!(await ensureCanEditImage())) return;
     setBusy(true);
     try {
@@ -191,6 +191,7 @@ export function ImageBottomControls() {
 
   const applyHotspots = async () => {
     if (!currentUrl) return;
+    if (!(await ensureCanEditImage())) return;
     setBusy(true);
     try {
       const count = hotspots.filter((h) => h.prompt.trim()).length;
@@ -214,6 +215,7 @@ export function ImageBottomControls() {
 
   const applyBrushRegions = async () => {
     if (!currentUrl) return;
+    if (!(await ensureCanEditImage())) return;
     setBusy(true);
     try {
       const out = await runMultiBrushEdits();
@@ -424,6 +426,7 @@ export function ImageBottomControls() {
                 disabled={busy}
                 onClick={async () => {
                   if (!currentUrl) return;
+                  if (!(await ensureCanEditImage())) return;
                   setBusy(true);
                   try {
                     const out = await resizeToMaxSide(currentUrl, 3840);
@@ -449,6 +452,7 @@ export function ImageBottomControls() {
                 disabled={busy}
                 onClick={async () => {
                   if (!currentUrl) return;
+                  if (!(await ensureCanEditImage())) return;
                   setBusy(true);
                   try {
                     const out = await resizeImage(currentUrl, 2);
@@ -467,6 +471,7 @@ export function ImageBottomControls() {
                 disabled={busy}
                 onClick={async () => {
                   if (!currentUrl) return;
+                  if (!(await ensureCanEditImage())) return;
                   setBusy(true);
                   try {
                     const out = await resizeImage(currentUrl, 0.5);
@@ -632,6 +637,7 @@ export function ImageBottomControls() {
                   pushToast('请为该风格填写描述词或上传参考图', 'info');
                   return;
                 }
+                if (!(await ensureCanEditImage())) return;
                 setBusy(true);
                 try {
                   const trimmed = prompt.trim();
@@ -689,6 +695,7 @@ function CropPane({ busy }: { busy: boolean }) {
       pushToast('请先在画面上框选裁剪区域', 'info');
       return;
     }
+    if (!(await ensureCanEditImage())) return;
     setApplying(true);
     try {
       const pixel = convertToPixelCrop(

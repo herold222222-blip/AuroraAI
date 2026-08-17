@@ -145,8 +145,15 @@ export function UploadPage() {
 
         <button
           className={`btn analyze-btn${image ? ' ready' : ''}`}
+          type="button"
           disabled={!image}
-          onClick={onAnalyze}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onAnalyze();
+          }}
         >
           <span className="analyze-icon" aria-hidden>
             ⚡

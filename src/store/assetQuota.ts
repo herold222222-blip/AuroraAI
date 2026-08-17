@@ -25,6 +25,7 @@ export async function refreshAssetCounts(): Promise<AssetCounts> {
     store.clear();
     return { image: 0, model: 0 };
   }
+  const localBeforeRefresh = store.counts();
   try {
     await store.load();
   } catch {
@@ -42,7 +43,18 @@ export async function refreshAssetCounts(): Promise<AssetCounts> {
         source?: string;
       };
       if (data?.counts && data.source === 'database') {
-        store.applyRemoteCounts(data.counts);
+        const counts = {
+          image: Math.max(
+            localBeforeRefresh.image,
+            Number(data.counts.image) || 0,
+          ),
+          model: Math.max(
+            localBeforeRefresh.model,
+            Number(data.counts.model) || 0,
+          ),
+        };
+        store.applyRemoteCounts(counts);
+        return counts;
       }
     }
   } catch {

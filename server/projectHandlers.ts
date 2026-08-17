@@ -94,7 +94,23 @@ export async function handleSaveProject(req: Request, res: Response) {
     });
     res.json({ ok: true, key: r.key });
   } catch (e) {
-    console.error('[projects] save', e);
+    const err = e as {
+      message?: string;
+      code?: string;
+      name?: string;
+      status?: number;
+      statusCode?: number;
+      requestId?: string;
+      res?: { status?: number; headers?: unknown };
+    };
+    console.error('[projects] save', {
+      message: err?.message || String(e),
+      code: err?.code,
+      name: err?.name,
+      status: err?.status || err?.statusCode || err?.res?.status,
+      requestId: err?.requestId,
+      raw: e,
+    });
     res.status(500).json({ error: e instanceof Error ? e.message : '保存失败' });
   }
 }
@@ -162,6 +178,7 @@ export async function handleProjectMedia(req: Request, res: Response) {
     }
     const { buffer, contentType } = await getObjectBuffer(key);
     res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Length', String(buffer.length));
     res.setHeader('Cache-Control', 'private, max-age=300');
     // 允许画布 crossOrigin / fetch，避免 toDataURL 污染
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');

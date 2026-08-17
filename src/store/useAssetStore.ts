@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { apiDeleteAssets, apiSaveAsset } from '../api/assetsApi';
 import { apiUrl } from '../config/api';
 import { useAuthStore } from './useAuthStore';
 import {
@@ -18,6 +19,27 @@ export interface AssetItem {
   projectId: string;
   projectName: string;
   prompt?: string;
+  pendingSync?: boolean;
+}
+
+function normalizeAssetUrl(url: string): string {
+  const raw = String(url || '');
+  if (!raw) return raw;
+  try {
+    const u = new URL(raw, window.location.origin);
+    const key = decodeURIComponent(u.searchParams.get('key') || '').replace(/^\//, '');
+    if (/^asset_/i.test(key) || raw.startsWith('asset:') || /^asset_/i.test(raw)) return '';
+    if (
+      /\/api\/projects\/media$/i.test(u.pathname) &&
+      /^assets\//i.test(key)
+    ) {
+      u.pathname = u.pathname.replace(/\/api\/projects\/media$/i, '/api/assets/media');
+      return u.toString();
+    }
+    return raw;
+  } catch {
+    return /^asset_/i.test(raw) || raw.startsWith('asset:') ? '' : raw;
+  }
 }
 
 function uid(prefix = 'asset'): string {
@@ -37,9 +59,11 @@ interface AssetState {
   loaded: boolean;
   loading: boolean;
   remoteCounts: AssetCounts | null;
+  loadSeq: number;
   /** 仅从数据库 /api/assets 拉取；切换项目/用户时调用 */
   load: (opts?: { projectId?: string }) => Promise<void>;
   clear: () => void;
+  resetForUserSwitch: () => void;
   applyRemoteCounts: (counts: AssetCounts) => void;
   addImageAsset: (
     input: {
@@ -75,6 +99,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   loaded: false,
   loading: false,
   remoteCounts: null,
+  loadSeq: 0,
 
   applyRemoteCounts: (counts) => {
     set({
@@ -89,13 +114,33 @@ export const useAssetStore = create<AssetState>((set, get) => ({
     set({ items: [], loaded: true, loading: false, remoteCounts: null });
   },
 
+  resetForUserSwitch: () => {
+    set((state) => ({
+      items: [],
+      loaded: false,
+      loading: true,
+      remoteCounts: null,
+      loadSeq: state.loadSeq + 1,
+    }));
+  },
+
   load: async (opts) => {
     const token = useAuthStore.getState().token;
+    void import('./useAppStore').then(({ useAppStore }) => {
+      useAppStore.getState().setCloudSyncStatus('syncing', '正在加载当前用户资产…');
+    });
     if (!token) {
-      set({ items: [], loaded: true, loading: false, remoteCounts: null });
+      set((state) => ({
+        items: [],
+        loaded: true,
+        loading: false,
+        remoteCounts: null,
+        loadSeq: state.loadSeq + 1,
+      }));
       return;
     }
-    set({ loading: true });
+    const seq = get().loadSeq + 1;
+    set({ loading: true, loaded: false, loadSeq: seq });
     try {
       const q = opts?.projectId
         ? `?projectId=${encodeURIComponent(opts.projectId)}`
@@ -104,8 +149,12 @@ export const useAssetStore = create<AssetState>((set, get) => ({
         headers: { Authorization: `Bearer ${token}` },
         credentials: 'include',
       });
+      if (get().loadSeq !== seq) return;
       if (res.status === 401) {
         set({ items: [], loaded: true, loading: false, remoteCounts: null });
+        void import('./useAppStore').then(({ useAppStore }) => {
+          useAppStore.getState().setCloudSyncStatus('error', '资产鉴权失效，请重新登录');
+        });
         return;
       }
       if (!res.ok) {
@@ -118,22 +167,37 @@ export const useAssetStore = create<AssetState>((set, get) => ({
         entries?: AssetItem[];
         counts?: AssetCounts;
       };
+      if (get().loadSeq !== seq) return;
       const entries = Array.isArray(data.entries) ? data.entries : [];
       const items: AssetItem[] = entries
         .map((e): AssetItem => ({
           id: String(e.id || uid(e.kind === 'model' ? 'mdl' : 'img')),
           kind: e.kind === 'model' ? ('model' as const) : ('image' as const),
-          url: String(e.url || ''),
+          url: normalizeAssetUrl(String(e.url || '')),
           label: String(e.label || ''),
           createdAt: Number(e.createdAt) || Date.now(),
           projectId: String(e.projectId || ''),
           projectName: String(e.projectName || ''),
           prompt: e.prompt ? String(e.prompt) : undefined,
+          pendingSync: false,
         }))
-        .filter((x) => x.url)
-        .sort((a, b) => b.createdAt - a.createdAt);
+        .filter((x) => x.url && !/key=asset_/i.test(x.url));
+      const pending = get().items.filter((x) => x.pendingSync);
+      const currentById = new Map(get().items.map((x) => [x.id, x]));
+      const merged = items.map((x) => {
+        const cur = currentById.get(x.id);
+        return cur ? { ...x, url: normalizeAssetUrl(x.url || cur.url) } : x;
+      });
+      const seen = new Set(merged.map((x) => `${x.id}::${x.url}`));
+      for (const item of pending) {
+        const key = `${item.id}::${item.url}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(item);
+      }
+      merged.sort((a, b) => b.createdAt - a.createdAt);
       set({
-        items,
+        items: merged,
         loaded: true,
         loading: false,
         remoteCounts: data.counts
@@ -143,9 +207,22 @@ export const useAssetStore = create<AssetState>((set, get) => ({
             }
           : null,
       });
+      void import('./useAppStore').then(({ useAppStore }) => {
+        useAppStore.getState().setCloudSyncStatus('success', '当前用户资产已同步');
+      });
     } catch (e) {
       console.error('[assets] load from db', e);
-      set({ loaded: true, loading: false });
+      if (get().loadSeq !== seq) return;
+      const msg = e instanceof Error ? e.message : '资产加载失败';
+      set({ items: get().items.filter((x) => x.pendingSync), loaded: true, loading: false, remoteCounts: null });
+      void import('./useAppStore').then(({ useAppStore }) => {
+        useAppStore.getState().setCloudSyncStatus(
+          'error',
+          /UserDisable/i.test(msg)
+            ? '当前账号访问资产服务受限，请联系管理员'
+            : msg,
+        );
+      });
     }
   },
 
@@ -189,6 +266,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
       projectId: input.projectId,
       projectName: input.projectName,
       prompt: input.prompt,
+      pendingSync: true,
     };
 
     set({
@@ -230,10 +308,17 @@ export const useAssetStore = create<AssetState>((set, get) => ({
 
   removeAssets: async (ids) => {
     if (!ids.length) return [];
+    const token = useAuthStore.getState().token;
     const idSet = new Set(ids);
     const removed = get().items.filter((x) => idSet.has(x.id));
     const next = get().items.filter((x) => !idSet.has(x.id));
     set({ items: next, remoteCounts: null });
+    try {
+      if (token) await apiDeleteAssets(ids, token);
+    } catch (err) {
+      set({ items: get().items.concat(removed).sort((a, b) => b.createdAt - a.createdAt) });
+      throw err;
+    }
     return removed;
   },
 
@@ -272,13 +357,74 @@ export function registerGeneratedImage(input: {
   prompt?: string;
   createdAt?: number;
 }) {
-  void import('./useAppStore').then(({ useAppStore }) => {
-    const app = useAppStore.getState();
-    void useAssetStore.getState().addImageAsset({
-      ...input,
-      projectId: app.activeProjectId,
-      projectName: app.projectName,
-    });
+  void Promise.all([
+    import('./useAppStore'),
+    import('./projectBag'),
+  ]).then(([{ useAppStore }, { isScratchProjectId }]) => {
+    void (async () => {
+      try {
+        const app = useAppStore.getState();
+        const formal = !isScratchProjectId(app.activeProjectId);
+        const token = useAuthStore.getState().token;
+        const projectId = formal ? app.activeProjectId : '';
+        const projectName = formal ? app.projectName : '';
+
+        const added = await useAssetStore.getState().addImageAsset({
+          ...input,
+          projectId,
+          projectName,
+        });
+        if (!added) return;
+
+        if (token) {
+          console.info('[assets] registerGeneratedImage', {
+            id: input.id,
+            url: input.url,
+            label: input.label,
+            projectId,
+            projectName,
+          });
+          const remote = await apiSaveAsset(
+            {
+              ...input,
+              kind: 'image',
+              projectId,
+              projectName,
+            },
+            token,
+          );
+          console.info('[assets] registerGeneratedImage remote', remote);
+          const remoteUrl = normalizeAssetUrl(remote.url);
+          useAssetStore.setState({
+            items: [
+              {
+                ...remote,
+                url: remoteUrl || input.url,
+                pendingSync: false,
+              },
+              ...useAssetStore
+                .getState()
+                .items.filter((x) => x.id !== remote.id),
+            ].sort((a, b) => b.createdAt - a.createdAt),
+            remoteCounts: null,
+          });
+          await useAssetStore.getState().load();
+        }
+      } catch (err) {
+        useAppStore.getState().pushToast(
+          err instanceof Error ? err.message : '资产自动保存失败',
+          'error',
+        );
+        void useAssetStore.getState().addImageAsset(
+          {
+            ...input,
+            projectId: '',
+            projectName: '',
+          },
+          { skipQuota: true },
+        );
+      }
+    })();
   });
 }
 

@@ -138,6 +138,8 @@ export interface ToastMessage {
   tone: 'info' | 'success' | 'error' | 'warning';
 }
 
+export type CloudSyncPhase = 'idle' | 'syncing' | 'success' | 'error';
+
 /** Orbit camera pose for restoring a snapshot view in the 3D viewport */
 export interface SnapshotCameraPose {
   position: [number, number, number];

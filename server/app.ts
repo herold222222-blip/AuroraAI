@@ -211,6 +211,14 @@ export function createApiApp() {
     const { handleListAssets } = await import('./assetHandlers');
     return handleListAssets(req, res);
   });
+  app.post('/api/assets', async (req, res) => {
+    const { handleSaveAsset } = await import('./assetHandlers');
+    return handleSaveAsset(req, res);
+  });
+  app.delete('/api/assets', async (req, res) => {
+    const { handleDeleteAssets } = await import('./assetHandlers');
+    return handleDeleteAssets(req, res);
+  });
   app.get('/api/assets/manifest', async (req, res) => {
     const { handleListAssets } = await import('./assetHandlers');
     return handleListAssets(req, res);
@@ -218,6 +226,18 @@ export function createApiApp() {
   app.get('/api/assets/counts', async (req, res) => {
     const { handleAssetCounts } = await import('./assetHandlers');
     return handleAssetCounts(req, res);
+  });
+  app.get('/api/assets/media', async (req, res) => {
+    const { handleAssetMedia } = await import('./assetHandlers');
+    return handleAssetMedia(req, res);
+  });
+  app.get('/api/assets/debug', async (req, res) => {
+    const { handleAssetDebug } = await import('./assetHandlers');
+    return handleAssetDebug(req, res);
+  });
+  app.post('/api/assets/cleanup', async (req, res) => {
+    const { handleCleanupBadAssets } = await import('./assetHandlers');
+    return handleCleanupBadAssets(req, res);
   });
   app.get('/api/auth/users', async (req, res) => {
     const r = await handleListUsers(reqHeaders(req));

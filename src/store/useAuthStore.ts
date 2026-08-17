@@ -152,6 +152,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         loginOpen: false,
         busy: false,
       });
+      void import('./useAssetStore').then((m) =>
+        m.useAssetStore.getState().resetForUserSwitch(),
+      );
       void import('./useAppStore').then((m) =>
         m.useAppStore.getState().hydrateFromRemote(),
       );
@@ -184,6 +187,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         loginOpen: false,
         busy: false,
       });
+      void import('./useAssetStore').then((m) =>
+        m.useAssetStore.getState().resetForUserSwitch(),
+      );
       void import('./useAppStore').then((m) =>
         m.useAppStore.getState().hydrateFromRemote(),
       );

@@ -114,11 +114,15 @@ export async function getObjectBuffer(key: string): Promise<{
   contentType: string;
 }> {
   const c = getClient();
-  const r = await c.get(key);
-  const content = r.content as Buffer | string;
+  const r = await c.get(key, undefined, { timeout: 30000 });
+  const content = r.content as Buffer | string | Uint8Array | ArrayBuffer | null | undefined;
   const buffer = Buffer.isBuffer(content)
     ? content
-    : Buffer.from(content || '');
+    : content instanceof Uint8Array
+      ? Buffer.from(content)
+      : content instanceof ArrayBuffer
+        ? Buffer.from(content)
+        : Buffer.from(content || '');
   const headers = (r.res?.headers ?? {}) as Record<string, unknown>;
   const rawType = headers['content-type'] ?? headers['Content-Type'];
   const headerType = typeof rawType === 'string' ? rawType : '';

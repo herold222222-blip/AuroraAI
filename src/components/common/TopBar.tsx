@@ -20,6 +20,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
   const enterAdminModule = useAppStore((s) => s.enterAdminModule);
   const goto = useAppStore((s) => s.goto);
 
+
   const user = useAuthStore((s) => s.user);
   const username = useAuthStore((s) => s.username);
   const openLogin = useAuthStore((s) => s.openLogin);

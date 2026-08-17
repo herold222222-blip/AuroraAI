@@ -6,6 +6,7 @@ import type {
   SceneGrid,
   ToastMessage,
   ViewId,
+  CloudSyncPhase,
   ViewportSettings,
   Dimension,
   MaterialConfig,
@@ -45,7 +46,7 @@ import {
   deleteFormalProjectRemote,
   loadRemoteProjects,
   readLastFormalProjectId,
-  saveFormalProjectToCloud,
+  saveProjectToCloud,
   writeLastFormalProjectId,
 } from './projectPersist';
 
@@ -112,6 +113,9 @@ interface AppState {
   exportSettings: ExportSettings;
 
   toasts: ToastMessage[];
+  cloudSyncPhase: CloudSyncPhase;
+  cloudSyncMessage: string;
+  cloudSyncAt: number;
 
   past: HistoryEntry[];
   future: HistoryEntry[];
@@ -192,8 +196,13 @@ interface AppState {
   removeProject: (id: string) => boolean;
   /** capture active project into projectBags */
   saveActiveProjectBag: () => void;
-  /** Persist current formal project (images + bag) to DB/OSS. */
-  saveCurrentProjectToCloud: (opts?: { silent?: boolean }) => Promise<boolean>;
+  /** Persist current project (formal or scratch; images + bag) to DB/OSS. */
+  saveCurrentProjectToCloud: (opts?: {
+    silent?: boolean;
+    projectId?: string;
+    name?: string;
+    bag?: ProjectBag;
+  }) => Promise<boolean>;
   /** Load saved/立项 projects after login. */
   hydrateFromRemote: () => Promise<void>;
   /** Drop in-memory formal projects on logout. */
@@ -278,6 +287,7 @@ interface AppState {
   setExportSettings: (patch: Partial<ExportSettings>) => void;
 
   pushToast: (text: string, tone?: ToastMessage['tone']) => void;
+  setCloudSyncStatus: (phase: CloudSyncPhase, message: string) => void;
   dismissToast: (id: string) => void;
 
   undo: () => void;
@@ -403,11 +413,10 @@ export const useAppStore = create<AppState>((set, get) => {
     projectId: string,
     opts?: { bag?: ProjectBag; name?: string; silent?: boolean; guestHint?: boolean },
   ) => {
-    if (isScratchProjectId(projectId)) return;
     const token = useAuthStore.getState().token;
     if (!token) {
       if (opts?.guestHint) {
-        get().pushToast('未登录：立项仅保存在本机，刷新后会丢失', 'info');
+        get().pushToast('未登录：当前空间仅保存在本机，刷新后会丢失', 'info');
       }
       return;
     }
@@ -417,17 +426,44 @@ export const useAppStore = create<AppState>((set, get) => {
       opts?.name ||
       get().projects.find((p) => p.id === projectId)?.name ||
       get().projectName;
-    void saveFormalProjectToCloud({ projectId, name, bag, token })
+    setCloudSyncStatus(
+      'syncing',
+      isScratchProjectId(projectId)
+        ? '正在同步未立项空间…'
+        : `正在同步「${name}」…`,
+    );
+    void saveProjectToCloud({ projectId, name, bag, token })
       .then(() => {
-        writeLastFormalProjectId(projectId);
-        if (!opts?.silent) get().pushToast('项目已保存到云端', 'success');
+        if (!isScratchProjectId(projectId)) writeLastFormalProjectId(projectId);
+        setCloudSyncStatus(
+          'success',
+          isScratchProjectId(projectId)
+            ? '未立项空间已同步'
+            : `「${name}」已同步`,
+        );
+        if (!opts?.silent) {
+          get().pushToast(
+            isScratchProjectId(projectId)
+              ? '未立项空间已保存到云端'
+              : '项目已保存到云端',
+            'success',
+          );
+        }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
+        setCloudSyncStatus(
+          'error',
+          err instanceof Error ? err.message : '云端同步失败',
+        );
         get().pushToast(
           err instanceof Error ? err.message : '云端保存失败',
           'error',
         );
       });
+  };
+
+  const setCloudSyncStatus = (phase: CloudSyncPhase, message: string) => {
+    set({ cloudSyncPhase: phase, cloudSyncMessage: message, cloudSyncAt: Date.now() });
   };
 
   const hydrateBag = (bag: ProjectBag, projectName: string) => {
@@ -511,6 +547,9 @@ export const useAppStore = create<AppState>((set, get) => {
     viewport: { ...DEFAULT_VIEWPORT },
     exportSettings: { ...DEFAULT_EXPORT },
     toasts: [],
+    cloudSyncPhase: 'idle',
+    cloudSyncMessage: '当前用户数据待同步',
+    cloudSyncAt: 0,
     past: [],
     future: [],
     opLog: [],
@@ -543,7 +582,22 @@ export const useAppStore = create<AppState>((set, get) => {
     enterImageModule: () => {
       const cur = get().view;
       if (cur !== 'image') {
-        set({ lastModelView: cur, view: 'image', transitionTo: null });
+        set({
+          lastModelView: cur,
+          view: 'image',
+          transitionTo: null,
+          image: null,
+          grid: null,
+          layers: [],
+          selectedLayerId: null,
+          selectedLayerIds: [],
+          aiRunning: false,
+          aiStage: '',
+          aiProgress: 0,
+          aiError: null,
+          aiUsedFallback: false,
+          pendingBuildAfterAnalysis: false,
+        });
       }
     },
     enterModelModule: () => {
@@ -1117,6 +1171,11 @@ export const useAppStore = create<AppState>((set, get) => {
         'success',
       );
       writeLastFormalProjectId(id);
+      persistCloud(SCRATCH_PROJECT_ID, {
+        bag: projectBags.get(SCRATCH_PROJECT_ID) ?? emptyBag(),
+        name: SCRATCH_PROJECT_NAME,
+        silent: true,
+      });
       persistCloud(id, { bag: workB, name: projectName, guestHint: true });
       return id;
     },
@@ -1167,7 +1226,13 @@ export const useAppStore = create<AppState>((set, get) => {
       hydrateBag(blank, projectName);
       get().pushToast(`已创建空白项目「${projectName}」`, 'success');
       writeLastFormalProjectId(id);
-      persistCloud(activeId, { silent: true });
+      persistCloud(activeId, {
+        bag: projectBags.get(activeId) ?? emptyBag(),
+        name: isScratchProjectId(activeId)
+          ? SCRATCH_PROJECT_NAME
+          : get().projects.find((p) => p.id === activeId)?.name || get().projectName,
+        silent: true,
+      });
       persistCloud(id, { bag: blank, name: projectName, guestHint: true });
       return id;
     },
@@ -1222,26 +1287,31 @@ export const useAppStore = create<AppState>((set, get) => {
     },
 
     saveCurrentProjectToCloud: async (opts) => {
-      const id = get().activeProjectId;
-      if (isScratchProjectId(id)) {
-        if (!opts?.silent) get().pushToast('请先立项，再保存到云端', 'info');
-        return false;
-      }
-      get().saveActiveProjectBag();
+      const id = opts?.projectId || get().activeProjectId;
+      const isActive = id === get().activeProjectId;
+      if (isActive) get().saveActiveProjectBag();
       const token = useAuthStore.getState().token;
       if (!token) {
         if (!opts?.silent) get().pushToast('请先登录后再保存到云端', 'info');
         return false;
       }
+      const meta = get().projects.find((p) => p.id === id);
+      const name = opts?.name ?? (isScratchProjectId(id) ? meta?.name || SCRATCH_PROJECT_NAME : meta?.name || get().projectName);
+      const bag = opts?.bag ?? projectBags.get(id) ?? (isActive ? captureBag() : emptyBag());
       try {
-        await saveFormalProjectToCloud({
+        await saveProjectToCloud({
           projectId: id,
-          name: get().projectName,
-          bag: projectBags.get(id) ?? captureBag(),
+          name,
+          bag,
           token,
         });
-        writeLastFormalProjectId(id);
-        if (!opts?.silent) get().pushToast('项目已保存到云端', 'success');
+        if (!isScratchProjectId(id)) writeLastFormalProjectId(id);
+        if (!opts?.silent) {
+          get().pushToast(
+            isScratchProjectId(id) ? '未立项空间已保存到云端' : '项目已保存到云端',
+            'success',
+          );
+        }
         return true;
       } catch (err) {
         if (!opts?.silent) {
@@ -1259,43 +1329,35 @@ export const useAppStore = create<AppState>((set, get) => {
       if (!token) return;
       try {
         const remotes = await loadRemoteProjects(token);
-        projectBags.set(get().activeProjectId, captureBag());
+        projectBags.clear();
         for (const p of remotes) {
           projectBags.set(p.id, p.bag);
         }
         void import('./useAssetStore').then(({ reloadAssetsFromDatabase }) => {
           void reloadAssetsFromDatabase();
         });
-        const remoteIds = new Set(remotes.map((p) => p.id));
-        const keepLocal = get().projects.filter(
-          (p) => !isScratchProjectId(p.id) && !remoteIds.has(p.id),
-        );
-        const formalMeta: ProjectMeta[] = [
-          ...remotes.map((p) => ({
-            id: p.id,
-            name: p.name,
-            updatedAt: p.updatedAt,
-            kind: 'project' as const,
-          })),
-          ...keepLocal,
-        ];
-        set({ projects: ensureScratchMeta(formalMeta) });
+        const metas: ProjectMeta[] = remotes.map((p) => ({
+          id: p.id,
+          name: p.name,
+          updatedAt: p.updatedAt,
+          kind: isScratchProjectId(p.id) ? ('scratch' as const) : ('project' as const),
+        }));
+        set({ projects: ensureScratchMeta(metas) });
+
+        const scratchRemote = remotes.find((p) => isScratchProjectId(p.id));
+        if (!scratchRemote && !projectBags.has(SCRATCH_PROJECT_ID)) {
+          projectBags.set(SCRATCH_PROJECT_ID, emptyBag());
+        }
 
         const last = readLastFormalProjectId();
         const restoreId =
           (last && remotes.some((p) => p.id === last) ? last : null) ??
-          remotes[0]?.id ??
-          null;
-        if (!restoreId) return;
-        if (restoreId === get().activeProjectId) {
-          hydrateBag(projectBags.get(restoreId) ?? emptyBag(), get().projectName);
-          return;
-        }
-        const name = remotes.find((p) => p.id === restoreId)?.name || '';
+          (scratchRemote ? SCRATCH_PROJECT_ID : remotes[0]?.id ?? SCRATCH_PROJECT_ID);
+        const name = remotes.find((p) => p.id === restoreId)?.name || (isScratchProjectId(restoreId) ? SCRATCH_PROJECT_NAME : '');
         const bag = projectBags.get(restoreId) ?? emptyBag();
-        set({ activeProjectId: restoreId, projectName: name });
-        writeLastFormalProjectId(restoreId);
-        hydrateBag(bag, name);
+        set({ activeProjectId: restoreId, projectName: name || SCRATCH_PROJECT_NAME, pendingPromote: null });
+        if (!isScratchProjectId(restoreId)) writeLastFormalProjectId(restoreId);
+        hydrateBag(bag, name || SCRATCH_PROJECT_NAME);
       } catch (err) {
         console.error('[projects] hydrate', err);
         get().pushToast(
@@ -2011,6 +2073,7 @@ export const useAppStore = create<AppState>((set, get) => {
       set({ toasts: [...get().toasts, { id, text, tone }] });
       setTimeout(() => get().dismissToast(id), 3000);
     },
+    setCloudSyncStatus,
     dismissToast: (id) =>
       set({ toasts: get().toasts.filter((t) => t.id !== id) }),
 

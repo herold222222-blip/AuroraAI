@@ -73,3 +73,19 @@ CREATE TABLE IF NOT EXISTS projects (
   updated_at BIGINT DEFAULT (extract(epoch from now()) * 1000)
 );
 CREATE INDEX IF NOT EXISTS projects_owner_id_idx ON projects (owner_id);
+
+CREATE TABLE IF NOT EXISTS assets (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  label TEXT,
+  url TEXT NOT NULL,
+  oss_key TEXT,
+  project_id TEXT,
+  project_name TEXT,
+  prompt TEXT,
+  created_at BIGINT DEFAULT (extract(epoch from now()) * 1000),
+  updated_at BIGINT DEFAULT (extract(epoch from now()) * 1000)
+);
+CREATE INDEX IF NOT EXISTS assets_owner_id_idx ON assets (owner_id);
+CREATE INDEX IF NOT EXISTS assets_project_id_idx ON assets (project_id);
