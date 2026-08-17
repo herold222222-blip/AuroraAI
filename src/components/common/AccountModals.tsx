@@ -10,6 +10,7 @@ import {
   type UsageLedgerEntry,
 } from '../../api/authApi';
 import { compressDataUrl } from '../../image/padImage';
+import { openFilePicker } from '../../utils/filePicker';
 import { useAppStore } from '../../store/useAppStore';
 import { useAuthStore } from '../../store/useAuthStore';
 import { useImageStore } from '../../image/useImageStore';
@@ -201,7 +202,7 @@ export function ProfileModal({ onClose }: { onClose: () => void }) {
               className={`auth-avatar-pick upload${
                 avatar.startsWith('data:') ? ' active' : ''
               }`}
-              onClick={() => fileRef.current?.click()}
+              onClick={() => openFilePicker(fileRef.current)}
             >
               {avatar.startsWith('data:') ? (
                 <img src={avatar} alt="" />

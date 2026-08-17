@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import { useAssetStore } from '../../store/useAssetStore';
@@ -19,6 +19,7 @@ export function ImageStartScreen() {
   const pushToast = useAppStore((s) => s.pushToast);
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const inputId = useId();
   const imageAtCap = useAssetStore((s) => {
     const c = s.counts();
     const l = s.limits();
@@ -43,10 +44,6 @@ export function ImageStartScreen() {
     reader.readAsDataURL(file);
   };
 
-  const tryOpenPicker = async () => {
-    if (!(await ensureCanUploadImage())) return;
-    fileRef.current?.click();
-  };
 
   return (
     <div className="img-start">
@@ -59,9 +56,9 @@ export function ImageStartScreen() {
           上传图片后即可修图；改图完成后可生成三维场景，打通图生模型与模型生图闭环。
         </p>
 
-        <div
+        <label
           className={`upload-box img-start-upload-box${drag ? ' drag' : ''}`}
-          onClick={() => void tryOpenPicker()}
+          htmlFor={imageAtCap ? undefined : inputId}
           onDragOver={(e) => {
             e.preventDefault();
             if (!imageAtCap) setDrag(true);
@@ -75,11 +72,19 @@ export function ImageStartScreen() {
           }}
         >
           <input
+            id={inputId}
             ref={fileRef}
             type="file"
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
             hidden
             disabled={imageAtCap}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={async (e) => {
+              if (!(await ensureCanUploadImage())) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) void acceptFile(f);
@@ -99,7 +104,7 @@ export function ImageStartScreen() {
                 : '支持 JPG / PNG / WEBP，单张上限 20MB'}
             </div>
           </div>
-        </div>
+        </label>
 
         <div className="img-feature-grid">
           <article className="img-feature-card">

@@ -5,6 +5,7 @@ import { useAuthStore } from '../../store/useAuthStore';
 import { useAppStore } from '../../store/useAppStore';
 import { apiDefaultAvatars, apiGetDocs, type SiteDocs } from '../../api/authApi';
 import { compressDataUrl } from '../../image/padImage';
+import { openFilePicker } from '../../utils/filePicker';
 
 type Mode = 'login' | 'register';
 
@@ -322,7 +323,7 @@ export function LoginModal() {
                   className={`auth-avatar-pick upload${
                     avatar.startsWith('data:') ? ' active' : ''
                   }`}
-                  onClick={() => fileRef.current?.click()}
+                  onClick={() => openFilePicker(fileRef.current)}
                   title="上传头像"
                 >
                   {avatar.startsWith('data:') ? (

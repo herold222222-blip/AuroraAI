@@ -13,6 +13,7 @@ import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { useAssetStore } from '../../store/useAssetStore';
 import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
+import { openFilePicker } from '../../utils/filePicker';
 
 const MAX_REFS = 5;
 
@@ -205,7 +206,7 @@ export function PromptRefPlus({ disabled }: { disabled?: boolean }) {
         disabled={disabled || full || blockedByAssetLimit}
         onClick={async () => {
           if (!(await ensureCanUploadImage())) return;
-          fileRef.current?.click();
+          openFilePicker(fileRef.current);
         }}
       >
         ＋

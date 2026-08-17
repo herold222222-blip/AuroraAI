@@ -38,6 +38,7 @@ import {
   IMAGE_EDIT_MODELS,
   type ImageEditModelId,
 } from '../../image/editModels';
+import { openFilePicker } from '../../utils/filePicker';
 
 const MAX_STYLE_REFS = 50;
 const STYLE_REF_API_BUDGET = 4.2 * 1024 * 1024;
@@ -1060,7 +1061,7 @@ function StylePane({
                 }
                 onClick={async () => {
                   if (!(await ensureCanUploadImage())) return;
-                  fileRef.current?.click();
+                  openFilePicker(fileRef.current);
                 }}
               >
                 {saving

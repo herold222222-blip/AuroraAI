@@ -7,6 +7,7 @@ import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import type { FaceQuality } from '../../types';
 import { useAssetStore } from '../../store/useAssetStore';
 import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
+import { openFilePicker } from '../../utils/filePicker';
 
 const ACCEPT = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_SIZE = 20 * 1024 * 1024;
@@ -81,7 +82,7 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
                   title={imageAtCap ? MSG_IMAGE_CAP : undefined}
                   onClick={async () => {
                     if (!(await ensureCanUploadImage())) return;
-                    inputRef.current?.click();
+                    openFilePicker(inputRef.current);
                   }}
                 >
                   重新上传
@@ -96,7 +97,7 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
               className={`mini-upload${drag ? ' drag' : ''}`}
               onClick={async () => {
                 if (!(await ensureCanUploadImage())) return;
-                inputRef.current?.click();
+                openFilePicker(inputRef.current);
               }}
               onDragOver={(e) => {
                 e.preventDefault();

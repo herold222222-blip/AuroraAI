@@ -5,6 +5,7 @@ import { STICKER_PRESETS } from '../../image/stickerPresets';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { useAssetStore } from '../../store/useAssetStore';
 import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
+import { openFilePicker } from '../../utils/filePicker';
 
 export function MaterialDrawer() {
   const open = useImageStore((s) => s.materialDrawerOpen);
@@ -146,7 +147,7 @@ export function MaterialDrawer() {
                 title={imageAtCap ? MSG_IMAGE_CAP : undefined}
                 onClick={async () => {
                   if (!(await ensureCanUploadImage())) return;
-                  fileRef.current?.click();
+                  openFilePicker(fileRef.current);
                 }}
               >
                 上传 PNG / SVG 镂空素材

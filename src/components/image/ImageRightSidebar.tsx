@@ -9,6 +9,7 @@ import { formatDateTime } from '../../utils/formatDateTime';
 import { ImageTo3DButton } from './ImageTo3DButton';
 import { useAssetStore } from '../../store/useAssetStore';
 import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
+import { openFilePicker } from '../../utils/filePicker';
 
 const ORIGINAL_SELECT_ID = '__original__';
 
@@ -616,7 +617,7 @@ export function ImageRightSidebar() {
             }
             onClick={async () => {
               if (!(await ensureCanUploadImage())) return;
-              fileRef.current?.click();
+              openFilePicker(fileRef.current);
             }}
           >
             上传本地图片
