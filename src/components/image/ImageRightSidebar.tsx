@@ -38,7 +38,6 @@ export function ImageRightSidebar() {
     (s) => s.overwriteOriginalWithResult,
   );
   const overwriteSnapshot = useImageStore((s) => s.overwriteSnapshot);
-  const openFromUrl = useImageStore((s) => s.openFromUrl);
   const mobileAlbumOpen = useImageStore((s) => s.mobileAlbumOpen);
   const setMobileAlbumOpen = useImageStore((s) => s.setMobileAlbumOpen);
 
@@ -77,6 +76,7 @@ export function ImageRightSidebar() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const lastClickedIdRef = useRef<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadInputId = 'image-right-sidebar-upload-input';
 
   const imageCount = useAssetStore((s) => s.counts().image);
   const modelCount = useAssetStore((s) => s.counts().model);
@@ -126,17 +126,30 @@ export function ImageRightSidebar() {
   const uploadFiles = async (files: FileList | File[]) => {
     if (!(await ensureCanUploadImage())) return;
     const list = Array.from(files);
-    list.forEach((f, i) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        openFromUrl(String(reader.result), {
-          label:
-            f.name.replace(/\.[^.]+$/, '') ||
-            `原图 ${sourceAlbums.length + i + 1}`,
-        });
-      };
-      reader.readAsDataURL(f);
-    });
+    const live = useImageStore.getState();
+    const hasCanvasImage = Boolean(live.currentUrl);
+    const baseCount = live.sourceAlbums.length;
+
+    const readFileAsDataUrl = (file: File) =>
+      new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
+        reader.readAsDataURL(file);
+      });
+
+    for (let i = 0; i < list.length; i += 1) {
+      const f = list[i];
+      const nextUrl = await readFileAsDataUrl(f);
+      const label =
+        f.name.replace(/\.[^.]+$/, '') ||
+        `原图 ${baseCount + i + 1}`;
+      if (i === 0 && hasCanvasImage) {
+        useImageStore.getState().replaceCurrentSourceImage(nextUrl, { label });
+        continue;
+      }
+      useImageStore.getState().openFromUrl(nextUrl, { label });
+    }
   };
 
   const toggleSelect = (id: string, opts?: { range?: boolean }) => {
@@ -593,35 +606,58 @@ export function ImageRightSidebar() {
         )}
 
         <input
+          id={uploadInputId}
           ref={fileRef}
           type="file"
           accept="image/*"
           multiple
           hidden
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            if (assetCounts.image >= assetLimits.image) {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
           onChange={(e) => {
-            const files = e.target.files;
-            if (files?.length) void uploadFiles(files);
+            const files = Array.from(e.target.files || []);
             e.target.value = '';
+            if (files.length) {
+              void uploadFiles(files).catch((err) => {
+                pushToast(err instanceof Error ? err.message : '上传本地图片失败', 'error');
+              });
+            }
           }}
         />
         <div className="img-side-footer-actions">
           <ImageTo3DButton size="sm" className="img-to-3d-orange" />
-          <button
-            type="button"
-            className="btn holo block"
-            disabled={assetCounts.image >= assetLimits.image}
+          <label
+            htmlFor={assetCounts.image >= assetLimits.image ? undefined : uploadInputId}
+            className={`btn holo block${assetCounts.image >= assetLimits.image ? ' is-disabled' : ''}`}
             title={
               assetCounts.image >= assetLimits.image
                 ? MSG_IMAGE_CAP
                 : '上传本地图片'
             }
-            onClick={async () => {
-              if (!(await ensureCanUploadImage())) return;
-              openFilePicker(fileRef.current);
+            aria-disabled={assetCounts.image >= assetLimits.image || undefined}
+            onClick={async (e) => {
+              if (assetCounts.image >= assetLimits.image) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              if (!(await ensureCanUploadImage())) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+              }
+              if (e.detail === 0) {
+                openFilePicker(fileRef.current);
+              }
             }}
           >
             上传本地图片
-          </button>
+          </label>
         </div>
       </div>
 

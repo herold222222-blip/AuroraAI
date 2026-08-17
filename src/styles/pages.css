@@ -3348,6 +3348,14 @@
   font-weight: 700;
   margin: 0;
 }
+.img-side-footer-actions .btn.holo.block {
+  width: 100%;
+  justify-content: center;
+}
+.img-side-footer-actions .btn.holo.block.is-disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
 .img-side-footer-actions .img-to-3d-orange,
 .img-side-footer-actions .img-to-3d-btn.img-to-3d-orange {
   color: #fff;

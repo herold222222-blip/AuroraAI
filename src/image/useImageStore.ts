@@ -313,6 +313,10 @@ interface ImageState {
   focusSavedResult: (url: string) => void;
   openSourceAlbum: (id: string) => void;
   backToSourceList: () => void;
+  replaceCurrentSourceImage: (
+    url: string,
+    opts?: { label?: string; snapshotId?: string | null },
+  ) => void;
   renameSourceAlbum: (id: string, label: string) => void;
   removeSourceAlbum: (id: string) => void;
   renameSavedImage: (id: string, label: string) => void;
@@ -810,6 +814,54 @@ export const useImageStore = create<ImageState>((set, get) => ({
       selectedOverlayId: null,
       cropSelection: undefined,
     }),
+
+  replaceCurrentSourceImage: (url, opts) => {
+    if (!url) return;
+    const activeId = get().activeSourceId;
+    if (!activeId || !get().currentUrl) {
+      get().openFromUrl(url, {
+        label: opts?.label,
+        ...(opts?.snapshotId ? { snapshotId: opts.snapshotId } : {}),
+      });
+      return;
+    }
+    const nextLabel = opts?.label?.trim();
+    const currentAlbum = get().sourceAlbums.find((a) => a.id === activeId);
+    const snapshotId = opts?.snapshotId ?? currentAlbum?.sourceSnapshotId ?? null;
+    const sourceAlbums = get().sourceAlbums.map((a) =>
+      a.id === activeId
+        ? {
+            ...a,
+            url,
+            ...(nextLabel ? { label: nextLabel } : {}),
+            ...(snapshotId ? { sourceSnapshotId: snapshotId } : { sourceSnapshotId: undefined }),
+          }
+        : a,
+    );
+    set({
+      sourceAlbums,
+      activeSourceId: activeId,
+      sourceSidebarMode: 'detail',
+      originalUrl: url,
+      currentUrl: url,
+      sourceSnapshotId: snapshotId,
+      compareBeforeUrl: null,
+      showCompare: false,
+      hotspots: [],
+      brushRegions: [],
+      hasMask: false,
+      past: [],
+      future: [],
+      prompt: '',
+      lastGeneratePrompt: null,
+      tab: 'retouch',
+      cropSelection: undefined,
+      cropAspect: 'original',
+      overlays: [],
+      selectedOverlayId: null,
+      savedImages: [],
+    });
+  },
 
   renameSourceAlbum: (id, label) =>
     set({

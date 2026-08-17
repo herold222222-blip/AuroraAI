@@ -24,10 +24,10 @@ export function LoginModal() {
   const busy = useAuthStore((s) => s.busy);
   const pushToast = useAppStore((s) => s.pushToast);
   const view = useAppStore((s) => s.view);
-  const enterImageModule = useAppStore((s) => s.enterImageModule);
+  const goto = useAppStore((s) => s.goto);
 
   const afterAuthSuccess = () => {
-    if (view === 'home') enterImageModule();
+    if (view === 'home') goto('upload');
   };
 
   const [mode, setMode] = useState<Mode>('login');

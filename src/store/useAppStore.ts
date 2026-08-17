@@ -466,10 +466,14 @@ export const useAppStore = create<AppState>((set, get) => {
     set({ cloudSyncPhase: phase, cloudSyncMessage: message, cloudSyncAt: Date.now() });
   };
 
-  const hydrateBag = (bag: ProjectBag, projectName: string) => {
+  const hydrateBag = (
+    bag: ProjectBag,
+    projectName: string,
+    opts?: { preserveCurrentView?: boolean },
+  ) => {
     const m = bag.model;
-    set({
-      view: m.view,
+    set((state) => ({
+      view: opts?.preserveCurrentView ? state.view : m.view,
       transitionTo: null,
       lastModelView: m.lastModelView,
       image: m.image ? { ...m.image } : null,
@@ -507,7 +511,7 @@ export const useAppStore = create<AppState>((set, get) => {
         : null,
       meshyModelUrl: m.meshyModelUrl ?? null,
       pendingBuildAfterAnalysis: false,
-    });
+    }));
     useImageStore.getState().importBag(bag.image);
     // 资产一律从数据库刷新，不再从 IndexedDB / OSS 清单拼装
     void import('./useAssetStore').then(({ reloadAssetsFromDatabase }) => {
@@ -1357,7 +1361,9 @@ export const useAppStore = create<AppState>((set, get) => {
         const bag = projectBags.get(restoreId) ?? emptyBag();
         set({ activeProjectId: restoreId, projectName: name || SCRATCH_PROJECT_NAME, pendingPromote: null });
         if (!isScratchProjectId(restoreId)) writeLastFormalProjectId(restoreId);
-        hydrateBag(bag, name || SCRATCH_PROJECT_NAME);
+        hydrateBag(bag, name || SCRATCH_PROJECT_NAME, {
+          preserveCurrentView: get().view !== 'home',
+        });
       } catch (err) {
         console.error('[projects] hydrate', err);
         get().pushToast(
