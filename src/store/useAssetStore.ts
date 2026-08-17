@@ -356,6 +356,7 @@ export function registerGeneratedImage(input: {
   label: string;
   prompt?: string;
   createdAt?: number;
+  deferCloudSave?: boolean;
 }) {
   void Promise.all([
     import('./useAppStore'),
@@ -384,31 +385,49 @@ export function registerGeneratedImage(input: {
             projectId,
             projectName,
           });
-          const remote = await apiSaveAsset(
-            {
-              ...input,
-              kind: 'image',
-              projectId,
-              projectName,
-            },
-            token,
-          );
-          console.info('[assets] registerGeneratedImage remote', remote);
-          const remoteUrl = normalizeAssetUrl(remote.url);
-          useAssetStore.setState({
-            items: [
+          const syncRemote = async () => {
+            const remote = await apiSaveAsset(
               {
-                ...remote,
-                url: remoteUrl || input.url,
-                pendingSync: false,
+                ...input,
+                kind: 'image',
+                projectId,
+                projectName,
               },
-              ...useAssetStore
-                .getState()
-                .items.filter((x) => x.id !== remote.id),
-            ].sort((a, b) => b.createdAt - a.createdAt),
-            remoteCounts: null,
-          });
-          await useAssetStore.getState().load();
+              token,
+            );
+            console.info('[assets] registerGeneratedImage remote', remote);
+            const remoteUrl = normalizeAssetUrl(remote.url);
+            const safeRemote = {
+              ...remote,
+              url: remoteUrl || input.url,
+              pendingSync: false,
+            };
+            useAssetStore.setState({
+              items: [
+                safeRemote,
+                ...useAssetStore
+                  .getState()
+                  .items.filter((x) => x.id !== remote.id),
+              ].sort((a, b) => b.createdAt - a.createdAt),
+              remoteCounts: null,
+            });
+            if (remoteUrl) {
+              await useAssetStore.getState().load();
+            } else {
+              console.warn('[assets] skip reload because remote url is invalid', {
+                id: remote.id,
+                remoteUrl: remote.url,
+                fallbackUrl: input.url,
+              });
+            }
+          };
+          if (input.deferCloudSave) {
+            void syncRemote().catch((err) => {
+              console.error('[assets] deferred sync failed', err);
+            });
+          } else {
+            await syncRemote();
+          }
         }
       } catch (err) {
         useAppStore.getState().pushToast(

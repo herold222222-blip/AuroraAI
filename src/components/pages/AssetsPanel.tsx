@@ -403,6 +403,7 @@ export function AssetsPanel() {
                       src={item.url}
                       alt={item.label}
                       loading="lazy"
+                      decoding="async"
                       onError={(e) => {
                         console.error('[assets] thumb load failed', {
                           id: item.id,
@@ -510,6 +511,7 @@ export function AssetsPanel() {
               <img
                 src={preview.url}
                 alt={preview.label}
+                decoding="async"
                 onError={() => {
                   console.error('[assets] preview load failed', {
                     id: preview.id,

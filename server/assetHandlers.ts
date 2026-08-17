@@ -201,6 +201,7 @@ async function listAllAssetsForOwner(
 
 export async function handleSaveAsset(req: Request, res: Response) {
   try {
+    console.info('[assets] handleSaveAsset hit');
     const auth = authOf(req);
     if (!auth) return res.status(401).json({ error: '未认证' });
     await ensureAssetsSchema();
@@ -337,6 +338,7 @@ export async function handleSaveAsset(req: Request, res: Response) {
 /** 资产列表：来自独立 assets 表 + 兼容旧 projects 聚合（当前登录用户） */
 export async function handleListAssets(req: Request, res: Response) {
   try {
+    console.info('[assets] handleListAssets hit');
     const auth = authOf(req);
     if (!auth) return res.status(401).json({ error: '未认证' });
     const items = await listAllAssetsForOwner(auth.sub, resolveOpts(req));

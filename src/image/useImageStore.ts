@@ -974,6 +974,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
         label: newShot.label,
         prompt: newShot.prompt,
         createdAt: newShot.createdAt,
+        deferCloudSave: true,
       });
     }
     void import('../store/useAppStore').then(({ useAppStore }) => {
@@ -1135,6 +1136,7 @@ export const useImageStore = create<ImageState>((set, get) => ({
       label: shot.label,
       prompt: shot.prompt,
       createdAt: shot.createdAt,
+      deferCloudSave: true,
     });
     void import('../store/useAppStore').then(({ useAppStore }) => {
       void useAppStore.getState().saveCurrentProjectToCloud({ silent: true });

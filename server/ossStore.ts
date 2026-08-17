@@ -6,6 +6,14 @@ const require = createRequire(import.meta.url);
 let OssCtor: typeof OSS | null = null;
 let client: OSS | null = null;
 
+type ObjectCacheEntry = {
+  expiresAt: number;
+  value: { buffer: Buffer; contentType: string };
+};
+const objectBufferCache = new Map<string, ObjectCacheEntry>();
+const OBJECT_BUFFER_TTL_MS = 5 * 60 * 1000;
+const OBJECT_BUFFER_MAX = 64;
+
 function env(name: string, aliName: string): string {
   return (process.env[name] || process.env[aliName] || '').trim();
 }
@@ -113,6 +121,13 @@ export async function getObjectBuffer(key: string): Promise<{
   buffer: Buffer;
   contentType: string;
 }> {
+  const now = Date.now();
+  const cached = objectBufferCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+  if (cached) objectBufferCache.delete(key);
+
   const c = getClient();
   const r = await c.get(key, undefined, { timeout: 30000 });
   const content = r.content as Buffer | string | Uint8Array | ArrayBuffer | null | undefined;
@@ -135,7 +150,16 @@ export async function getObjectBuffer(key: string): Promise<{
         : key.endsWith('.webp')
           ? 'image/webp'
           : 'application/octet-stream');
-  return { buffer, contentType };
+  const value = { buffer, contentType };
+  objectBufferCache.set(key, {
+    expiresAt: now + OBJECT_BUFFER_TTL_MS,
+    value,
+  });
+  if (objectBufferCache.size > OBJECT_BUFFER_MAX) {
+    const firstKey = objectBufferCache.keys().next().value;
+    if (firstKey) objectBufferCache.delete(firstKey);
+  }
+  return value;
 }
 
 export async function listObjects(prefix = '', maxKeys = 1000) {
@@ -149,6 +173,7 @@ export async function deletePrefix(prefix: string) {
   const objs = await listObjects(prefix, 1000);
   const names = objs.map((o) => o.name).filter(Boolean) as string[];
   if (!names.length) return;
+  for (const name of names) objectBufferCache.delete(name);
   const c = getClient();
   await c.deleteMulti(names, { quiet: true });
 }
