@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageDownloadMenu } from '../common/ImageDownloadContext';
 import { useAssetStore } from '../../store/useAssetStore';
@@ -24,6 +24,7 @@ export function UploadPage() {
 
   const [drag, setDrag] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = useId();
 
   const acceptFile = async (file: File) => {
     if (!(await ensureCanUploadImage())) return;
@@ -76,12 +77,9 @@ export function UploadPage() {
           </p>
         </div>
 
-        <div
+        <label
           className={`upload-box${drag ? ' drag' : ''}${image ? ' has-image' : ''}`}
-          onClick={async () => {
-            if (!(await ensureCanUploadImage())) return;
-            inputRef.current?.click();
-          }}
+          htmlFor={imageAtCap ? undefined : inputId}
           onDragOver={(e) => {
             e.preventDefault();
             if (!imageAtCap) setDrag(true);
@@ -90,11 +88,19 @@ export function UploadPage() {
           onDrop={onDrop}
         >
           <input
+            id={inputId}
             ref={inputRef}
             type="file"
             accept=".jpg,.jpeg,.png,.webp"
             hidden
             disabled={imageAtCap}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={async (e) => {
+              if (!(await ensureCanUploadImage())) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
             onChange={(e) => {
               const f = e.target.files?.[0];
               if (f) void acceptFile(f);
@@ -117,8 +123,10 @@ export function UploadPage() {
                   disabled={imageAtCap}
                   title={imageAtCap ? MSG_IMAGE_CAP : undefined}
                   onClick={async (e) => {
+                    e.preventDefault();
                     e.stopPropagation();
                     if (!(await ensureCanUploadImage())) return;
+                    inputRef.current?.showPicker?.();
                     inputRef.current?.click();
                   }}
                 >
@@ -141,11 +149,12 @@ export function UploadPage() {
               </div>
             </div>
           )}
-        </div>
+        </label>
 
         <button
           className={`btn analyze-btn${image ? ' ready' : ''}`}
           type="button"
+          touch-action="manipulation"
           disabled={!image}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}

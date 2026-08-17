@@ -70,6 +70,9 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
   transition: all 0.2s ease;
   position: relative;
   box-shadow: 0 0 0 0 rgba(0, 210, 255, 0);
@@ -141,6 +144,7 @@
   object-fit: contain;
   border-radius: var(--radius);
   background: #0d1014;
+  pointer-events: none;
 }
 .upload-preview-info {
   display: flex;
@@ -157,6 +161,10 @@
 }
 .upload-preview-info .btn {
   flex-shrink: 0;
+  min-height: 44px;
+  padding-inline: 14px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .examples {
@@ -183,6 +191,9 @@
   padding: 0;
   transition: all 0.16s;
   text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 .example-card img {
   width: 100%;
@@ -213,7 +224,7 @@
 .analyze-btn {
   margin-top: 34px;
   min-width: 280px;
-  height: 56px;
+  min-height: 56px;
   padding: 0 48px;
   font-size: 17px;
   font-weight: 700;
@@ -221,6 +232,8 @@
   border-radius: 16px;
   border: 1.5px solid transparent;
   transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 .analyze-btn:disabled {
   background: #eef1f5;
@@ -245,6 +258,58 @@
     0 0 0 5px rgba(0, 210, 255, 0.2);
   transform: translateY(-1px);
 }
+
+@media (hover: none) {
+  .upload-box:hover,
+  .upload-box.drag,
+  .example-card:hover,
+  .analyze-btn.ready:hover:not(:disabled) {
+    transform: none;
+    filter: none;
+  }
+
+  .upload-box:hover {
+    border-color: var(--line-strong);
+    background: var(--white);
+  }
+
+  .example-card:hover {
+    border-color: var(--line);
+    box-shadow: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .upload-box {
+    min-height: 240px;
+  }
+
+  .upload-inner {
+    width: 100%;
+    padding: 34px 22px;
+  }
+
+  .upload-title {
+    line-height: 1.45;
+  }
+
+  .upload-preview-info {
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .upload-preview-info .fname {
+    flex: 1 1 100%;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .analyze-btn {
+    width: min(100%, 420px);
+    padding-inline: 24px;
+  }
+}
+
 .analyze-btn.ready:active:not(:disabled) {
   transform: translateY(0);
   filter: brightness(0.98);
