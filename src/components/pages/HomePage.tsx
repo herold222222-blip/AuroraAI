@@ -56,6 +56,7 @@ function useReveal() {
 
 export function HomePage() {
   const goto = useAppStore((s) => s.goto);
+  const enterImageModule = useAppStore((s) => s.enterImageModule);
   const enterModelModule = useAppStore((s) => s.enterModelModule);
   const enterAdminModule = useAppStore((s) => s.enterAdminModule);
   const pushToast = useAppStore((s) => s.pushToast);
@@ -219,7 +220,7 @@ export function HomePage() {
                 type="button"
                 className="home-top-btn home-top-btn-solid"
                 data-auth-free
-                onClick={() => goto('upload')}
+                onClick={() => enterImageModule()}
               >
                 进入 Demo
               </button>
@@ -284,7 +285,7 @@ export function HomePage() {
                 type="button"
                 className="home-cta"
                 data-auth-free
-                onClick={() => goto('upload')}
+                onClick={() => enterImageModule()}
               >
                 立即体验 Demo
               </button>
@@ -334,7 +335,7 @@ export function HomePage() {
               type="button"
               className="home-cta home-cta-ghost"
               data-auth-free
-              onClick={() => goto('upload')}
+              onClick={() => enterImageModule()}
             >
               进入改图工具
             </button>

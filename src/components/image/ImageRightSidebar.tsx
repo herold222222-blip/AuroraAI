@@ -604,61 +604,61 @@ export function ImageRightSidebar() {
             </div>
           </>
         )}
+      </div>
 
-        <input
-          id={uploadInputId}
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          multiple
-          hidden
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
+      <input
+        id={uploadInputId}
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          if (assetCounts.image >= assetLimits.image) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }}
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = '';
+          if (files.length) {
+            void uploadFiles(files).catch((err) => {
+              pushToast(err instanceof Error ? err.message : '上传本地图片失败', 'error');
+            });
+          }
+        }}
+      />
+      <div className="img-side-footer-actions">
+        <ImageTo3DButton size="sm" className="img-to-3d-orange" />
+        <label
+          htmlFor={assetCounts.image >= assetLimits.image ? undefined : uploadInputId}
+          className={`btn holo block${assetCounts.image >= assetLimits.image ? ' is-disabled' : ''}`}
+          title={
+            assetCounts.image >= assetLimits.image
+              ? MSG_IMAGE_CAP
+              : '上传本地图片'
+          }
+          aria-disabled={assetCounts.image >= assetLimits.image || undefined}
+          onClick={async (e) => {
             if (assetCounts.image >= assetLimits.image) {
               e.preventDefault();
               e.stopPropagation();
+              return;
+            }
+            if (!(await ensureCanUploadImage())) {
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+            if (e.detail === 0) {
+              openFilePicker(fileRef.current);
             }
           }}
-          onChange={(e) => {
-            const files = Array.from(e.target.files || []);
-            e.target.value = '';
-            if (files.length) {
-              void uploadFiles(files).catch((err) => {
-                pushToast(err instanceof Error ? err.message : '上传本地图片失败', 'error');
-              });
-            }
-          }}
-        />
-        <div className="img-side-footer-actions">
-          <ImageTo3DButton size="sm" className="img-to-3d-orange" />
-          <label
-            htmlFor={assetCounts.image >= assetLimits.image ? undefined : uploadInputId}
-            className={`btn holo block${assetCounts.image >= assetLimits.image ? ' is-disabled' : ''}`}
-            title={
-              assetCounts.image >= assetLimits.image
-                ? MSG_IMAGE_CAP
-                : '上传本地图片'
-            }
-            aria-disabled={assetCounts.image >= assetLimits.image || undefined}
-            onClick={async (e) => {
-              if (assetCounts.image >= assetLimits.image) {
-                e.preventDefault();
-                e.stopPropagation();
-                return;
-              }
-              if (!(await ensureCanUploadImage())) {
-                e.preventDefault();
-                e.stopPropagation();
-                return;
-              }
-              if (e.detail === 0) {
-                openFilePicker(fileRef.current);
-              }
-            }}
-          >
-            上传本地图片
-          </label>
-        </div>
+        >
+          上传本地图片
+        </label>
       </div>
 
       {confirmAlbumId && (

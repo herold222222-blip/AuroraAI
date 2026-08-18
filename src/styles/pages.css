@@ -3245,7 +3245,9 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   background: rgba(255, 255, 255, 0.9);
   backdrop-filter: blur(10px);
 }
@@ -3339,8 +3341,11 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 0;
+  padding: 10px 10px 12px;
+  border-top: 1px solid var(--line);
   flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.96);
 }
 .img-side-footer-actions .img-to-3d-btn {
   width: 100%;
@@ -3368,8 +3373,10 @@
   filter: brightness(1.05);
 }
 .img-side-scroll {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px 10px 16px;
 }
 .img-side-hint {
@@ -3439,7 +3446,7 @@
 .img-side-back {
   margin: 0;
   flex-shrink: 0;
-  max-width: 58%;
+  max-width: 100%;
   justify-content: flex-start;
   font-weight: 600;
   white-space: nowrap;
@@ -3530,6 +3537,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding-bottom: 4px;
 }
 .img-side-album-card {
   position: relative;
@@ -3552,9 +3560,13 @@
   z-index: 1;
 }
 .img-side-album-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  aspect-ratio: 4 / 3;
-  min-height: 140px;
+  height: auto;
+  min-height: 0;
+  aspect-ratio: auto;
   padding: 8px;
   border: none;
   border-radius: 10px;
@@ -3564,8 +3576,10 @@
 }
 .img-side-album-thumb img {
   width: 100%;
-  height: 100%;
+  height: auto;
+  max-width: 100%;
   object-fit: contain;
+  object-position: center;
   display: block;
 }
 .img-side-album-caption {
@@ -3793,7 +3807,8 @@
 
 @media (max-width: 960px) and (min-width: 721px) {
   .img-right-sidebar {
-    max-height: min(36vh, 320px);
+    max-height: min(58vh, 640px);
+    height: auto;
     border-left: none;
     border-top: 1px solid var(--line);
   }
@@ -3974,7 +3989,7 @@
     right: 0;
     bottom: calc(var(--mobile-nav-h, 58px) + env(safe-area-inset-bottom, 0px));
     z-index: 60;
-    max-height: min(68vh, 520px);
+    max-height: min(78vh, 720px);
     height: auto;
     border-left: none;
     border-top: 1px solid var(--line);
