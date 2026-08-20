@@ -230,10 +230,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       quotaOpen: false,
       quotaModalKind: 'allExhausted',
     });
-    void import('./useAppStore').then((m) =>
-      m.useAppStore.getState().resetFormalProjects(),
-    );
+    void import('./useAppStore').then((m) => {
+      const app = m.useAppStore.getState();
+      app.resetFormalProjects();
+      // resetFormalProjects 会 hydrate 草稿 bag，可能把 view 拉回工作台；退出后强制回首页
+      app.goto('home');
+    });
     void import('./useAssetStore').then((m) => m.useAssetStore.getState().clear());
+    void import('../image/useImageStore').then((m) => {
+      m.useImageStore.setState({
+        sourceAlbums: [],
+        activeSourceId: null,
+        originalUrl: null,
+        currentUrl: null,
+        savedImages: [],
+        sourceSidebarMode: 'list',
+      });
+    });
   },
 
   requireAuth: () => {

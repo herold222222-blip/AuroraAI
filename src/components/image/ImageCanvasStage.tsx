@@ -141,6 +141,21 @@ export function ImageCanvasStage() {
     };
   }, [currentUrl, markImageReady]);
 
+  // 预热主图：浏览器可提前发起请求，缩短首屏等待
+  useEffect(() => {
+    if (!currentUrl || currentUrl.startsWith('data:') || currentUrl.startsWith('blob:')) {
+      return;
+    }
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'image';
+    link.href = currentUrl;
+    document.head.appendChild(link);
+    return () => {
+      link.remove();
+    };
+  }, [currentUrl]);
+
   const resetView = useCallback(() => {
     setViewScale(1);
     setPan({ x: 0, y: 0 });
@@ -629,6 +644,8 @@ export function ImageCanvasStage() {
       className="img-main"
       crossOrigin="anonymous"
       draggable={false}
+      decoding="async"
+      fetchPriority={"high" as 'high'}
       onContextMenu={(e) =>
         currentUrl && openDownloadMenu(e, currentUrl, 'aurora-edit')
       }

@@ -10,6 +10,8 @@ const UNASSIGNED_PROJECT_ID = '__unassigned';
 
 export type AssetKind = 'image' | 'model';
 
+export type AssetRole = 'original' | 'result' | 'model' | string;
+
 export type DirectAsset = {
   id: string;
   kind: AssetKind;
@@ -19,6 +21,7 @@ export type DirectAsset = {
   projectId: string;
   projectName: string;
   prompt?: string;
+  role?: AssetRole;
 };
 
 let assetsSchemaReady = false;
@@ -104,11 +107,18 @@ async function ensureAssetsSchema() {
     ALTER TABLE assets
     ADD COLUMN IF NOT EXISTS oss_key TEXT
   `);
+  await pool.query(`
+    ALTER TABLE assets
+    ADD COLUMN IF NOT EXISTS role TEXT
+  `);
   await pool.query(
     `CREATE INDEX IF NOT EXISTS assets_owner_id_idx ON assets (owner_id)`,
   );
   await pool.query(
     `CREATE INDEX IF NOT EXISTS assets_project_id_idx ON assets (project_id)`,
+  );
+  await pool.query(
+    `CREATE INDEX IF NOT EXISTS assets_owner_role_idx ON assets (owner_id, role)`,
   );
   assetsSchemaReady = true;
 }
@@ -153,7 +163,7 @@ async function resolveAssetUrl(
 
 async function directAssetsForOwner(
   ownerId: string,
-  opts?: ResolveUrlOptions & { projectId?: string },
+  opts?: ResolveUrlOptions & { projectId?: string; role?: string },
 ): Promise<DirectAsset[]> {
   await ensureAssetsSchema();
   const pool = getPool();
@@ -165,8 +175,12 @@ async function directAssetsForOwner(
     params.push(opts.projectId);
     where += ` AND project_id=$${params.length}`;
   }
+  if (opts?.role) {
+    params.push(opts.role);
+    where += ` AND role=$${params.length}`;
+  }
   const res = await pool.query(
-    `SELECT id, kind, label, url, oss_key, project_id, project_name, prompt, created_at
+    `SELECT id, kind, label, url, oss_key, project_id, project_name, prompt, role, created_at
      FROM assets
      WHERE ${where}
      ORDER BY created_at DESC`,
@@ -186,13 +200,14 @@ async function directAssetsForOwner(
       projectId: String(row.project_id || ''),
       projectName: String(row.project_name || ''),
       prompt: row.prompt ? String(row.prompt) : undefined,
+      role: row.role ? String(row.role) : undefined,
     })),
   )).filter((item) => Boolean(item.url));
 }
 
 async function listAllAssetsForOwner(
   ownerId: string,
-  opts?: ResolveUrlOptions & { projectId?: string },
+  opts?: ResolveUrlOptions & { projectId?: string; role?: string },
 ) {
   const direct = await directAssetsForOwner(ownerId, opts);
   direct.sort((a, b) => b.createdAt - a.createdAt);
@@ -212,6 +227,17 @@ export async function handleSaveAsset(req: Request, res: Response) {
     const projectId = String(body.projectId || '').trim();
     const projectName = projectId ? String(body.projectName || '').trim() : '';
     const prompt = body.prompt ? String(body.prompt) : null;
+    const roleRaw = String(body.role || '').trim().toLowerCase();
+    const role =
+      kind === 'model'
+        ? 'model'
+        : roleRaw === 'original'
+          ? 'original'
+          : roleRaw === 'result'
+            ? 'result'
+            : kind === 'image'
+              ? 'result'
+              : null;
     const now = Number(body.createdAt) || Date.now();
     const existing = await getPool().query(
       'SELECT id FROM assets WHERE id=$1 AND owner_id=$2',
@@ -240,9 +266,16 @@ export async function handleSaveAsset(req: Request, res: Response) {
         return res.status(503).json({ error: 'OSS 未配置，无法保存资产图片' });
       }
       const { mime, buf } = parseDataUrl(String(body.dataUrl));
+      // 业务上限 10MB（客户端会先压缩；此处兜底拒绝过大上传）
+      if (buf.length > 10 * 1024 * 1024) {
+        return res.status(413).json({
+          error: '图片超过 10MB，请压缩后再上传',
+        });
+      }
       const hash = createHash('sha256').update(buf).digest('hex').slice(0, 16);
       const scope = projectId || 'unassigned';
-      ossKey = `assets/${auth.sub}/${scope}/${hash}.${extOf(mime)}`;
+      const folder = role === 'original' ? 'originals' : 'results';
+      ossKey = `assets/${auth.sub}/${scope}/${folder}/${hash}.${extOf(mime)}`;
       await oss.uploadBuffer(buf, ossKey, mime);
       url = `oss:${ossKey}`;
     }
@@ -253,8 +286,8 @@ export async function handleSaveAsset(req: Request, res: Response) {
     const pool = getPool();
     await pool.query(
       `INSERT INTO assets
-       (id, owner_id, kind, label, url, oss_key, project_id, project_name, prompt, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
+       (id, owner_id, kind, label, url, oss_key, project_id, project_name, prompt, role, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
        ON CONFLICT (id) DO UPDATE SET
          label=EXCLUDED.label,
          url=EXCLUDED.url,
@@ -262,6 +295,7 @@ export async function handleSaveAsset(req: Request, res: Response) {
          project_id=EXCLUDED.project_id,
          project_name=EXCLUDED.project_name,
          prompt=EXCLUDED.prompt,
+         role=COALESCE(EXCLUDED.role, assets.role),
          updated_at=EXCLUDED.updated_at
        WHERE assets.owner_id = EXCLUDED.owner_id`,
       [
@@ -274,6 +308,7 @@ export async function handleSaveAsset(req: Request, res: Response) {
         projectId || null,
         projectName || null,
         prompt,
+        role,
         now,
       ],
     );
@@ -288,7 +323,7 @@ export async function handleSaveAsset(req: Request, res: Response) {
       ossKey,
     });
     const saved = await pool.query(
-      `SELECT id, kind, label, url, oss_key, project_id, project_name, prompt, created_at
+      `SELECT id, kind, label, url, oss_key, project_id, project_name, prompt, role, created_at
        FROM assets
        WHERE id=$1 AND owner_id=$2
        LIMIT 1`,
@@ -311,6 +346,7 @@ export async function handleSaveAsset(req: Request, res: Response) {
         projectId: row?.project_id ? String(row.project_id) : projectId,
         projectName: row?.project_name ? String(row.project_name) : projectName,
         prompt: row?.prompt ? String(row.prompt) : prompt || undefined,
+        role: row?.role ? String(row.role) : role || undefined,
       },
     });
   } catch (e) {
@@ -341,15 +377,24 @@ export async function handleListAssets(req: Request, res: Response) {
     console.info('[assets] handleListAssets hit');
     const auth = authOf(req);
     if (!auth) return res.status(401).json({ error: '未认证' });
-    const items = await listAllAssetsForOwner(auth.sub, resolveOpts(req));
+    const role =
+      typeof req.query.role === 'string' ? req.query.role.trim() : '';
+    const items = await listAllAssetsForOwner(auth.sub, {
+      ...resolveOpts(req),
+      ...(role ? { role } : {}),
+    });
+    // 计数始终按全部资产，避免 role 过滤导致配额展示不准
+    const allForCounts = role
+      ? await listAllAssetsForOwner(auth.sub, resolveOpts(req))
+      : items;
     res.json({
       ok: true,
       source: 'database',
       entries: items,
       limits: DEFAULT_LIMITS,
       counts: {
-        image: items.filter((x) => x.kind === 'image').length,
-        model: items.filter((x) => x.kind === 'model').length,
+        image: allForCounts.filter((x) => x.kind === 'image').length,
+        model: allForCounts.filter((x) => x.kind === 'model').length,
       },
     });
   } catch (e) {
@@ -391,10 +436,37 @@ export async function handleAssetMedia(req: Request, res: Response) {
     if (!isOssConfigured()) {
       return res.status(503).json({ error: 'OSS 未配置' });
     }
-    const { buffer, contentType } = await oss.getObjectBuffer(key);
+    const wRaw = Number(req.query.w);
+    const w =
+      Number.isFinite(wRaw) && wRaw > 0
+        ? Math.min(2048, Math.max(64, Math.floor(wRaw)))
+        : 0;
+    // 列表缩略图：走 OSS 图片处理，显著减小传输体积
+    const process = w
+      ? `image/resize,w_${w}/quality,q_72`
+      : undefined;
+    const etag = `"${createHash('sha1').update(`${key}|${process || ''}`).digest('hex')}"`;
+    if (req.headers['if-none-match'] === etag) {
+      res.status(304).end();
+      return;
+    }
+    let buffer: Buffer;
+    let contentType: string;
+    try {
+      ({ buffer, contentType } = await oss.getObjectBuffer(key, { process }));
+    } catch (err) {
+      if (process) {
+        console.warn('[assets] media process failed, fallback full', key, err);
+        ({ buffer, contentType } = await oss.getObjectBuffer(key));
+      } else {
+        throw err;
+      }
+    }
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Length', String(buffer.length));
-    res.setHeader('Cache-Control', 'private, max-age=300');
+    res.setHeader('ETag', etag);
+    // 同用户媒体可长缓存；URL 含 token 时仅当前会话复用，仍能显著加速列表回访
+    res.setHeader('Cache-Control', 'private, max-age=604800, immutable');
     res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.end(buffer);
@@ -565,7 +637,7 @@ export async function handleDeleteAssets(req: Request, res: Response) {
         .filter(Boolean)
         .map(async (key) => {
           try {
-            await oss.deletePrefix(key);
+            await oss.deleteObject(key);
           } catch (e) {
             console.warn('[assets] delete oss failed', key, e);
           }

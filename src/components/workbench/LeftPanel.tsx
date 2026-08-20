@@ -8,9 +8,12 @@ import type { FaceQuality } from '../../types';
 import { useAssetStore } from '../../store/useAssetStore';
 import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 import { openFilePicker } from '../../utils/filePicker';
+import {
+  ensureUnderMaxBytes,
+  UPLOAD_MAX_BYTES,
+} from '../../image/padImage';
 
 const ACCEPT = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_SIZE = 20 * 1024 * 1024;
 
 const FACE_OPTIONS: { value: FaceQuality; label: string }[] = [
   { value: 'auto', label: 'Auto' },
@@ -48,18 +51,31 @@ export function LeftPanel({ showRebuild }: LeftPanelProps) {
       pushToast('仅支持 JPG / PNG / WEBP 格式图片', 'error');
       return;
     }
-    if (file.size > MAX_SIZE) {
-      pushToast('单张图片不能超过 20MB', 'error');
-      return;
+    const rawUrl = URL.createObjectURL(file);
+    try {
+      const { dataUrl, compressed, bytes } = await ensureUnderMaxBytes(
+        rawUrl,
+        UPLOAD_MAX_BYTES,
+      );
+      URL.revokeObjectURL(rawUrl);
+      if (bytes > UPLOAD_MAX_BYTES) {
+        pushToast('图片过大，压缩后仍超过 10MB', 'error');
+        return;
+      }
+      if (compressed) {
+        pushToast('图片超过 10MB，已自动压缩', 'info');
+      }
+      setImage({
+        url: dataUrl,
+        name: file.name,
+        size: bytes,
+      });
+      resegment();
+      if (replacing) pushToast('已更换图片', 'success');
+    } catch (err) {
+      URL.revokeObjectURL(rawUrl);
+      pushToast(err instanceof Error ? err.message : '读取图片失败', 'error');
     }
-    setImage({
-      url: URL.createObjectURL(file),
-      name: file.name,
-      size: file.size,
-    });
-    // re-run segmentation for the newly uploaded image
-    resegment();
-    if (replacing) pushToast('已更换图片', 'success');
   };
 
   return (

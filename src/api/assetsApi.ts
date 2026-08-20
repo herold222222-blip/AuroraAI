@@ -1,6 +1,8 @@
 import { apiUrl } from '../config/api';
 import type { AssetItem, AssetKind } from '../store/useAssetStore';
 
+export type AssetRole = 'original' | 'result' | 'model';
+
 function authHeader(token?: string): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
@@ -75,6 +77,22 @@ export async function apiDeleteAssets(ids: string[], token?: string) {
   return readJson(res) as Promise<{ ok: boolean; deletedIds?: string[] }>;
 }
 
+export async function apiListAssets(
+  opts?: { role?: AssetRole; projectId?: string },
+  token?: string,
+): Promise<AssetItem[]> {
+  const q = new URLSearchParams();
+  if (opts?.role) q.set('role', opts.role);
+  if (opts?.projectId) q.set('projectId', opts.projectId);
+  const qs = q.toString();
+  const res = await fetch(apiUrl(`/api/assets${qs ? `?${qs}` : ''}`), {
+    headers: { ...authHeader(token) },
+    credentials: 'include',
+  });
+  const data = (await readJson(res)) as { entries?: AssetItem[] };
+  return Array.isArray(data.entries) ? data.entries : [];
+}
+
 export async function apiSaveAsset(
   input: {
     id?: string;
@@ -85,6 +103,7 @@ export async function apiSaveAsset(
     projectName?: string;
     prompt?: string;
     createdAt?: number;
+    role?: AssetRole;
   },
   token?: string,
 ): Promise<AssetItem> {
@@ -97,6 +116,7 @@ export async function apiSaveAsset(
     projectName: input.projectName,
     prompt: input.prompt,
     createdAt: input.createdAt,
+    role: input.role,
     ...payload,
   };
   const res = await fetch(apiUrl('/api/assets'), {

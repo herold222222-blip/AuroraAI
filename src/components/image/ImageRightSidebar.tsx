@@ -10,6 +10,7 @@ import { ImageTo3DButton } from './ImageTo3DButton';
 import { useAssetStore } from '../../store/useAssetStore';
 import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
 import { openFilePicker } from '../../utils/filePicker';
+import { assetThumbUrl } from '../../utils/assetThumb';
 
 const ORIGINAL_SELECT_ID = '__original__';
 
@@ -125,30 +126,36 @@ export function ImageRightSidebar() {
 
   const uploadFiles = async (files: FileList | File[]) => {
     if (!(await ensureCanUploadImage())) return;
-    const list = Array.from(files);
-    const live = useImageStore.getState();
-    const hasCanvasImage = Boolean(live.currentUrl);
-    const baseCount = live.sourceAlbums.length;
+    const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    if (!list.length) {
+      pushToast('请选择图片文件', 'error');
+      return;
+    }
+    const { uploadOriginalImageFile } = await import(
+      '../../image/uploadOriginal'
+    );
 
-    const readFileAsDataUrl = (file: File) =>
-      new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
-        reader.readAsDataURL(file);
-      });
-
+    let okCount = 0;
     for (let i = 0; i < list.length; i += 1) {
+      if (i > 0 && !(await ensureCanUploadImage())) break;
       const f = list[i];
-      const nextUrl = await readFileAsDataUrl(f);
-      const label =
-        f.name.replace(/\.[^.]+$/, '') ||
-        `原图 ${baseCount + i + 1}`;
-      if (i === 0 && hasCanvasImage) {
-        useImageStore.getState().replaceCurrentSourceImage(nextUrl, { label });
-        continue;
+      // 始终新增原图，绝不覆盖当前原图（覆盖仅用于页脚「更换」）
+      const result = await uploadOriginalImageFile(f, {
+        label: f.name.replace(/\.[^.]+$/, '') || undefined,
+        replaceCurrent: false,
+      });
+      if (!result.ok) {
+        pushToast(result.error, 'error');
+        break;
       }
-      useImageStore.getState().openFromUrl(nextUrl, { label });
+      okCount += 1;
+    }
+    if (okCount > 0) {
+      useImageStore.getState().backToSourceList();
+      pushToast(
+        okCount === 1 ? '原图已上传' : `已上传 ${okCount} 张原图`,
+        'success',
+      );
     }
   };
 
@@ -335,7 +342,11 @@ export function ImageRightSidebar() {
                 )
               }
             >
-              <img src={originalUrl} alt="原图" />
+              <img
+                src={assetThumbUrl(originalUrl, 640)}
+                alt="原图"
+                decoding="async"
+              />
             </button>
             <div className="img-side-label">
               {activeAlbum ? (
@@ -459,7 +470,12 @@ export function ImageRightSidebar() {
                     title="进入该原图"
                     onContextMenu={(e) => openDownloadMenu(e, a.url, a.label)}
                   >
-                    <img src={a.url} alt={a.label} />
+                    <img
+                      src={assetThumbUrl(a.url, 480)}
+                      alt={a.label}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   </button>
                   <div className="img-side-album-caption">
                     <div className="img-side-meta-row">
@@ -536,7 +552,12 @@ export function ImageRightSidebar() {
                     title="载入该结果"
                     onContextMenu={(e) => openDownloadMenu(e, s.url, s.label)}
                   >
-                    <img src={s.url} alt={s.label} />
+                    <img
+                      src={assetThumbUrl(s.url, 480)}
+                      alt={s.label}
+                      loading="lazy"
+                      decoding="async"
+                    />
                   </button>
                   <div className="img-side-result-caption">
                     <div className="img-side-meta-stack">

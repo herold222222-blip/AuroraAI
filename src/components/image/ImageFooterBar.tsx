@@ -2,6 +2,8 @@ import { useRef } from 'react';
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import { downloadImage } from '../../utils/downloadImage';
+import { uploadOriginalImageFile } from '../../image/uploadOriginal';
+import { ensureCanUploadImage } from '../../store/assetQuota';
 
 export function ImageFooterBar() {
   const pushToast = useAppStore((s) => s.pushToast);
@@ -12,7 +14,6 @@ export function ImageFooterBar() {
   const resetToOriginal = useImageStore((s) => s.resetToOriginal);
   const backToSourceList = useImageStore((s) => s.backToSourceList);
   const currentUrl = useImageStore((s) => s.currentUrl);
-  const openFromUrl = useImageStore((s) => s.openFromUrl);
   const setShowCompare = useImageStore((s) => s.setShowCompare);
   const showCompare = useImageStore((s) => s.showCompare);
   const compareBeforeUrl = useImageStore((s) => s.compareBeforeUrl);
@@ -67,9 +68,17 @@ export function ImageFooterBar() {
         onChange={(e) => {
           const f = e.target.files?.[0];
           if (!f) return;
-          const reader = new FileReader();
-          reader.onload = () => openFromUrl(String(reader.result));
-          reader.readAsDataURL(f);
+          void (async () => {
+            if (!(await ensureCanUploadImage())) return;
+            const result = await uploadOriginalImageFile(f, {
+              replaceCurrent: true,
+            });
+            if (!result.ok) {
+              pushToast(result.error, 'error');
+              return;
+            }
+            pushToast('原图已更新', 'success');
+          })();
           e.target.value = '';
         }}
       />
@@ -78,7 +87,8 @@ export function ImageFooterBar() {
         className="btn ghost sm"
         onClick={() => {
           const narrow =
-            typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches;
+            typeof window !== 'undefined' &&
+            window.matchMedia('(max-width: 720px)').matches;
           if (narrow) {
             if (!mobileAlbumOpen) {
               backToSourceList();

@@ -302,7 +302,10 @@ interface ImageState {
   /** Toggle crop frame; switch aspect when showing a different ratio. */
   toggleCropGuide: (aspect: CropAspect) => void;
 
-  openFromUrl: (url: string, opts?: { snapshotId?: string; label?: string }) => void;
+  openFromUrl: (
+    url: string,
+    opts?: { snapshotId?: string; label?: string; albumId?: string },
+  ) => void;
   /** Import one or more model snapshots as 原图 albums; focus the first. */
   importSnapshotAlbums: (
     shots: { id: string; url: string; label: string }[],
@@ -662,15 +665,24 @@ export const useImageStore = create<ImageState>((set, get) => ({
     }
 
     const n = get().sourceAlbums.length + 1;
+    const albumId = opts?.albumId?.trim() || uid('src');
+    const existingIdx = get().sourceAlbums.findIndex((a) => a.id === albumId);
     const album: SourceAlbum = {
-      id: uid('src'),
+      id: albumId,
       url,
       label: opts?.label || `原图 ${n}`,
       createdAt: Date.now(),
-      results: [],
+      results:
+        existingIdx >= 0
+          ? get().sourceAlbums[existingIdx].results.map((r) => ({ ...r }))
+          : [],
     };
+    const sourceAlbums =
+      existingIdx >= 0
+        ? get().sourceAlbums.map((a) => (a.id === albumId ? album : a))
+        : [...get().sourceAlbums, album];
     set({
-      sourceAlbums: [...get().sourceAlbums, album],
+      sourceAlbums,
       activeSourceId: album.id,
       sourceSidebarMode: 'detail',
       originalUrl: url,
@@ -888,6 +900,9 @@ export const useImageStore = create<ImageState>((set, get) => ({
             selectedOverlayId: null,
           }
         : {}),
+    });
+    void import('../store/useAssetStore').then(({ useAssetStore }) => {
+      void useAssetStore.getState().removeAssets([id]);
     });
   },
 
@@ -1206,6 +1221,15 @@ export const useImageStore = create<ImageState>((set, get) => ({
           : a,
       ),
     });
+    // 同步删除数据库 + OSS
+    void import('../store/useAssetStore').then(({ useAssetStore }) => {
+      void useAssetStore.getState().removeAssets([id]).catch((err) => {
+        console.warn('[image] delete result asset failed', err);
+      });
+    });
+    void import('../store/useAppStore').then(({ useAppStore }) => {
+      void useAppStore.getState().saveCurrentProjectToCloud({ silent: true });
+    });
   },
 
   removeResultsByRefs: ({ ids, urls }) => {
@@ -1213,6 +1237,11 @@ export const useImageStore = create<ImageState>((set, get) => ({
     const urlSet = new Set(urls || []);
     if (!idSet.size && !urlSet.size) return;
     const drop = (r: SavedEditImage) => idSet.has(r.id) || urlSet.has(r.url);
+    const removedIds = [
+      ...get().savedImages.filter(drop).map((r) => r.id),
+      ...get().sourceAlbums.flatMap((a) => a.results.filter(drop).map((r) => r.id)),
+    ];
+    const uniqueIds = [...new Set(removedIds)];
     const savedImages = get().savedImages.filter((r) => !drop(r));
     set({
       savedImages,
@@ -1221,6 +1250,13 @@ export const useImageStore = create<ImageState>((set, get) => ({
         results: a.results.filter((r) => !drop(r)),
       })),
     });
+    if (uniqueIds.length) {
+      void import('../store/useAssetStore').then(({ useAssetStore }) => {
+        void useAssetStore.getState().removeAssets(uniqueIds).catch((err) => {
+          console.warn('[image] delete result assets failed', err);
+        });
+      });
+    }
   },
 
   overwriteSnapshot: (updateSnapshot) => {

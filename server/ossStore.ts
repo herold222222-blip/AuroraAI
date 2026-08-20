@@ -11,8 +11,8 @@ type ObjectCacheEntry = {
   value: { buffer: Buffer; contentType: string };
 };
 const objectBufferCache = new Map<string, ObjectCacheEntry>();
-const OBJECT_BUFFER_TTL_MS = 5 * 60 * 1000;
-const OBJECT_BUFFER_MAX = 64;
+const OBJECT_BUFFER_TTL_MS = 30 * 60 * 1000;
+const OBJECT_BUFFER_MAX = 128;
 
 function env(name: string, aliName: string): string {
   return (process.env[name] || process.env[aliName] || '').trim();
@@ -117,19 +117,31 @@ export async function resolveObjectUrl(
   }
 }
 
-export async function getObjectBuffer(key: string): Promise<{
+export async function getObjectBuffer(
+  key: string,
+  opts?: { process?: string },
+): Promise<{
   buffer: Buffer;
   contentType: string;
 }> {
+  const process = String(opts?.process || '').trim();
+  const cacheKey = process ? `${key}::${process}` : key;
   const now = Date.now();
-  const cached = objectBufferCache.get(key);
+  const cached = objectBufferCache.get(cacheKey);
   if (cached && cached.expiresAt > now) {
     return cached.value;
   }
-  if (cached) objectBufferCache.delete(key);
+  if (cached) objectBufferCache.delete(cacheKey);
 
   const c = getClient();
-  const r = await c.get(key, undefined, { timeout: 30000 });
+  const r = await c.get(
+    key,
+    undefined,
+    {
+      timeout: 30000,
+      ...(process ? { process } : {}),
+    },
+  );
   const content = r.content as Buffer | string | Uint8Array | ArrayBuffer | null | undefined;
   const buffer = Buffer.isBuffer(content)
     ? content
@@ -143,15 +155,17 @@ export async function getObjectBuffer(key: string): Promise<{
   const headerType = typeof rawType === 'string' ? rawType : '';
   const contentType =
     headerType ||
-    (key.endsWith('.png')
-      ? 'image/png'
-      : key.endsWith('.jpg') || key.endsWith('.jpeg')
-        ? 'image/jpeg'
-        : key.endsWith('.webp')
-          ? 'image/webp'
-          : 'application/octet-stream');
+    (process.includes('format,webp')
+      ? 'image/webp'
+      : key.endsWith('.png')
+        ? 'image/png'
+        : key.endsWith('.jpg') || key.endsWith('.jpeg')
+          ? 'image/jpeg'
+          : key.endsWith('.webp')
+            ? 'image/webp'
+            : 'application/octet-stream');
   const value = { buffer, contentType };
-  objectBufferCache.set(key, {
+  objectBufferCache.set(cacheKey, {
     expiresAt: now + OBJECT_BUFFER_TTL_MS,
     value,
   });
@@ -168,12 +182,35 @@ export async function listObjects(prefix = '', maxKeys = 1000) {
   return res.objects || [];
 }
 
+export async function deleteObject(key: string) {
+  if (!isOssConfigured() || !key) return;
+  objectBufferCache.delete(key);
+  for (const cacheKey of [...objectBufferCache.keys()]) {
+    if (cacheKey.startsWith(`${key}::`)) objectBufferCache.delete(cacheKey);
+  }
+  const c = getClient();
+  try {
+    await c.delete(key);
+  } catch (err) {
+    console.warn('[oss] deleteObject failed', key, err);
+  }
+}
+
 export async function deletePrefix(prefix: string) {
   if (!isOssConfigured()) return;
   const objs = await listObjects(prefix, 1000);
   const names = objs.map((o) => o.name).filter(Boolean) as string[];
-  if (!names.length) return;
-  for (const name of names) objectBufferCache.delete(name);
+  if (!names.length) {
+    // 精确 key 删除（无子对象时 list 可能为空）
+    await deleteObject(prefix);
+    return;
+  }
+  for (const name of names) {
+    objectBufferCache.delete(name);
+    for (const cacheKey of [...objectBufferCache.keys()]) {
+      if (cacheKey.startsWith(`${name}::`)) objectBufferCache.delete(cacheKey);
+    }
+  }
   const c = getClient();
   await c.deleteMulti(names, { quiet: true });
 }
@@ -189,5 +226,6 @@ export default {
   resolveObjectUrl,
   getObjectBuffer,
   listObjects,
+  deleteObject,
   deletePrefix,
 };

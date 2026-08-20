@@ -3,6 +3,7 @@ import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import { useAssetStore } from '../../store/useAssetStore';
 import { ensureCanUploadImage, MSG_IMAGE_CAP } from '../../store/assetQuota';
+import { uploadOriginalImageFile } from '../../image/uploadOriginal';
 
 const EXAMPLES = [
   { src: '/examples/example-1.jpg', name: '山谷溪流景观' },
@@ -12,13 +13,12 @@ const EXAMPLES = [
 ];
 
 const ACCEPT = ['image/jpeg', 'image/png', 'image/webp'];
-const MAX_SIZE = 20 * 1024 * 1024;
 
 export function ImageStartScreen() {
-  const openFromUrl = useImageStore((s) => s.openFromUrl);
   const pushToast = useAppStore((s) => s.pushToast);
   const fileRef = useRef<HTMLInputElement>(null);
   const [drag, setDrag] = useState(false);
+  const [busy, setBusy] = useState(false);
   const inputId = useId();
   const imageAtCap = useAssetStore((s) => {
     const c = s.counts();
@@ -27,23 +27,52 @@ export function ImageStartScreen() {
   });
 
   const acceptFile = async (file: File) => {
+    if (busy) return;
     if (!(await ensureCanUploadImage())) return;
     if (!ACCEPT.includes(file.type)) {
       pushToast('仅支持 JPG / PNG / WEBP 格式图片', 'error');
       return;
     }
-    if (file.size > MAX_SIZE) {
-      pushToast('单张图片不能超过 20MB', 'error');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () =>
-      openFromUrl(String(reader.result), {
+    setBusy(true);
+    try {
+      const result = await uploadOriginalImageFile(file, {
         label: file.name.replace(/\.[^.]+$/, '') || undefined,
       });
-    reader.readAsDataURL(file);
+      if (!result.ok) {
+        pushToast(result.error, 'error');
+        return;
+      }
+      pushToast('原图已上传并保存', 'success');
+    } finally {
+      setBusy(false);
+    }
   };
 
+  const acceptExample = async (ex: (typeof EXAMPLES)[number]) => {
+    if (busy) return;
+    if (!(await ensureCanUploadImage())) return;
+    setBusy(true);
+    try {
+      const res = await fetch(ex.src);
+      if (!res.ok) throw new Error('示例图加载失败');
+      const blob = await res.blob();
+      const file = new File(
+        [blob],
+        `${ex.name}.jpg`,
+        { type: blob.type || 'image/jpeg' },
+      );
+      const result = await uploadOriginalImageFile(file, { label: ex.name });
+      if (!result.ok) {
+        pushToast(result.error, 'error');
+        return;
+      }
+      pushToast('已载入示例图', 'success');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : '示例图加载失败', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="img-start">
@@ -57,11 +86,13 @@ export function ImageStartScreen() {
         </p>
 
         <label
-          className={`upload-box img-start-upload-box${drag ? ' drag' : ''}`}
-          htmlFor={imageAtCap ? undefined : inputId}
+          className={`upload-box img-start-upload-box${drag ? ' drag' : ''}${
+            busy ? ' is-busy' : ''
+          }`}
+          htmlFor={imageAtCap || busy ? undefined : inputId}
           onDragOver={(e) => {
             e.preventDefault();
-            if (!imageAtCap) setDrag(true);
+            if (!imageAtCap && !busy) setDrag(true);
           }}
           onDragLeave={() => setDrag(false)}
           onDrop={(e) => {
@@ -77,7 +108,7 @@ export function ImageStartScreen() {
             type="file"
             accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
             hidden
-            disabled={imageAtCap}
+            disabled={imageAtCap || busy}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={async (e) => {
               if (!(await ensureCanUploadImage())) {
@@ -96,12 +127,14 @@ export function ImageStartScreen() {
             <div className="upload-title">
               {imageAtCap
                 ? '图片资产已达上限'
-                : '点击选择，或将图片拖拽到此处'}
+                : busy
+                  ? '正在上传…'
+                  : '点击选择，或将图片拖拽到此处'}
             </div>
             <div className="upload-hint">
               {imageAtCap
                 ? MSG_IMAGE_CAP
-                : '支持 JPG / PNG / WEBP，单张上限 20MB'}
+                : '支持 JPG / PNG / WEBP，单张超过 10MB 将自动压缩'}
             </div>
           </div>
         </label>
@@ -130,14 +163,16 @@ export function ImageStartScreen() {
               key={ex.src}
               type="button"
               className="img-start-example"
-              disabled={imageAtCap}
+              disabled={imageAtCap || busy}
               title={imageAtCap ? MSG_IMAGE_CAP : ex.name}
-              onClick={async () => {
-                if (!(await ensureCanUploadImage())) return;
-                openFromUrl(ex.src, { label: ex.name });
-              }}
+              onClick={() => void acceptExample(ex)}
             >
-              <img src={ex.src} alt={ex.name} />
+              <img
+                src={ex.src}
+                alt={ex.name}
+                loading="lazy"
+                decoding="async"
+              />
               <span>{ex.name}</span>
             </button>
           ))}

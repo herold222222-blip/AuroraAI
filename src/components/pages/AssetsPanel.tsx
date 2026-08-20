@@ -7,6 +7,7 @@ import {
 import { useAppStore } from '../../store/useAppStore';
 import { useImageStore } from '../../image/useImageStore';
 import { useAuthStore } from '../../store/useAuthStore';
+import { assetThumbUrl } from '../../utils/assetThumb';
 
 type KindFilter = 'all' | AssetKind;
 type SortMode = 'newest' | 'oldest' | 'project';
@@ -400,7 +401,7 @@ export function AssetsPanel() {
                 >
                   {item.kind === 'image' ? (
                     <img
-                      src={item.url}
+                      src={assetThumbUrl(item.url, 360)}
                       alt={item.label}
                       loading="lazy"
                       decoding="async"

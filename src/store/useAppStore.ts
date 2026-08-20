@@ -513,7 +513,7 @@ export const useAppStore = create<AppState>((set, get) => {
       pendingBuildAfterAnalysis: false,
     }));
     useImageStore.getState().importBag(bag.image);
-    // 资产一律从数据库刷新，不再从 IndexedDB / OSS 清单拼装
+    // 资产与原图列表以数据库为准（在 bag 导入之后再拉，避免被旧 bag 覆盖）
     void import('./useAssetStore').then(({ reloadAssetsFromDatabase }) => {
       void reloadAssetsFromDatabase();
     });
@@ -1337,9 +1337,6 @@ export const useAppStore = create<AppState>((set, get) => {
         for (const p of remotes) {
           projectBags.set(p.id, p.bag);
         }
-        void import('./useAssetStore').then(({ reloadAssetsFromDatabase }) => {
-          void reloadAssetsFromDatabase();
-        });
         const metas: ProjectMeta[] = remotes.map((p) => ({
           id: p.id,
           name: p.name,
@@ -1364,6 +1361,9 @@ export const useAppStore = create<AppState>((set, get) => {
         hydrateBag(bag, name || SCRATCH_PROJECT_NAME, {
           preserveCurrentView: get().view !== 'home',
         });
+        // 必须在 hydrateBag 之后拉取：原图列表以 DB 为准，与本地/线上一致
+        const { reloadAssetsFromDatabase } = await import('./useAssetStore');
+        await reloadAssetsFromDatabase();
       } catch (err) {
         console.error('[projects] hydrate', err);
         get().pushToast(

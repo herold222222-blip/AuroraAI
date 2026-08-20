@@ -218,6 +218,79 @@ export async function compressDataUrl(
   canvas.width = Math.max(1, Math.round(img.width * scale));
   canvas.height = Math.max(1, Math.round(img.height * scale));
   const ctx = canvas.getContext('2d')!;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL('image/jpeg', quality);
 }
+
+/** 上传/生成图体积上限：10MB */
+export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+function approxDataUrlBytes(dataUrl: string): number {
+  const i = dataUrl.indexOf(',');
+  const b64 = i >= 0 ? dataUrl.slice(i + 1) : dataUrl;
+  // base64 → bytes ≈ len * 3/4
+  return Math.floor((b64.length * 3) / 4);
+}
+
+/**
+ * 若图片超过 maxBytes，自动多级压缩（降边长 + JPEG 质量），直到达标或无法再压。
+ * 入参可为 data URL / blob URL / http(s)；返回尽量为 jpeg data URL。
+ */
+export async function ensureUnderMaxBytes(
+  src: string,
+  maxBytes = UPLOAD_MAX_BYTES,
+): Promise<{ dataUrl: string; compressed: boolean; bytes: number }> {
+  let dataUrl = src;
+  if (!src.startsWith('data:')) {
+    const img = await loadImageEl(src);
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth || img.width;
+    canvas.height = img.naturalHeight || img.height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0);
+    // 保留透明通道时用 png 体积大；统一先转 jpeg 便于控体积
+    dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+  }
+
+  let bytes = approxDataUrlBytes(dataUrl);
+  if (bytes <= maxBytes) {
+    return { dataUrl, compressed: false, bytes };
+  }
+
+  const steps: Array<{ maxSide: number; quality: number }> = [
+    { maxSide: 2560, quality: 0.88 },
+    { maxSide: 2048, quality: 0.82 },
+    { maxSide: 1600, quality: 0.78 },
+    { maxSide: 1280, quality: 0.72 },
+    { maxSide: 1024, quality: 0.68 },
+    { maxSide: 900, quality: 0.6 },
+    { maxSide: 768, quality: 0.55 },
+    { maxSide: 640, quality: 0.5 },
+  ];
+
+  let compressed = false;
+  for (const step of steps) {
+    dataUrl = await compressDataUrl(dataUrl, step.maxSide, step.quality);
+    bytes = approxDataUrlBytes(dataUrl);
+    compressed = true;
+    if (bytes <= maxBytes) break;
+  }
+
+  return { dataUrl, compressed, bytes };
+}
+
+/** 侧栏缩略图用小图，加速列表渲染 */
+export async function makeThumbDataUrl(
+  src: string,
+  maxSide = 480,
+  quality = 0.7,
+): Promise<string> {
+  try {
+    return await compressDataUrl(src, maxSide, quality);
+  } catch {
+    return src;
+  }
+}
+

@@ -19,6 +19,7 @@ export interface AssetItem {
   projectId: string;
   projectName: string;
   prompt?: string;
+  role?: 'original' | 'result' | 'model' | string;
   pendingSync?: boolean;
 }
 
@@ -179,6 +180,7 @@ export const useAssetStore = create<AssetState>((set, get) => ({
           projectId: String(e.projectId || ''),
           projectName: String(e.projectName || ''),
           prompt: e.prompt ? String(e.prompt) : undefined,
+          role: e.role ? String(e.role) : undefined,
           pendingSync: false,
         }))
         .filter((x) => x.url && !/key=asset_/i.test(x.url));
@@ -342,11 +344,15 @@ export const useAssetStore = create<AssetState>((set, get) => ({
   },
 }));
 
-/** 登录/切用户/切项目后：强制从数据库刷新资产 */
+/** 登录/切用户/切项目后：强制从数据库刷新资产，并同步原图列表 */
 export async function reloadAssetsFromDatabase(opts?: {
   projectId?: string;
 }) {
   await useAssetStore.getState().load(opts);
+  const { syncOriginalAlbumsFromDatabase } = await import(
+    '../image/uploadOriginal'
+  );
+  await syncOriginalAlbumsFromDatabase();
 }
 
 /** Fire-and-forget helper used from image/model stores. */
@@ -361,17 +367,27 @@ export function registerGeneratedImage(input: {
   void Promise.all([
     import('./useAppStore'),
     import('./projectBag'),
-  ]).then(([{ useAppStore }, { isScratchProjectId }]) => {
+    import('../image/uploadOriginal'),
+  ]).then(([{ useAppStore }, { isScratchProjectId }, { prepareGeneratedImageUrl }]) => {
     void (async () => {
       try {
+        const prepared = await prepareGeneratedImageUrl(input.url);
+        const finalUrl = prepared.url;
+        if (prepared.compressed) {
+          useAppStore.getState().pushToast(
+            '生成图超过 10MB，已自动压缩后入库',
+            'info',
+          );
+        }
         const app = useAppStore.getState();
         const formal = !isScratchProjectId(app.activeProjectId);
         const token = useAuthStore.getState().token;
         const projectId = formal ? app.activeProjectId : '';
         const projectName = formal ? app.projectName : '';
+        const payload = { ...input, url: finalUrl };
 
         const added = await useAssetStore.getState().addImageAsset({
-          ...input,
+          ...payload,
           projectId,
           projectName,
         });
@@ -379,19 +395,20 @@ export function registerGeneratedImage(input: {
 
         if (token) {
           console.info('[assets] registerGeneratedImage', {
-            id: input.id,
-            url: input.url,
-            label: input.label,
+            id: payload.id,
+            url: payload.url,
+            label: payload.label,
             projectId,
             projectName,
           });
           const syncRemote = async () => {
             const remote = await apiSaveAsset(
               {
-                ...input,
+                ...payload,
                 kind: 'image',
                 projectId,
                 projectName,
+                role: 'result',
               },
               token,
             );
@@ -399,7 +416,7 @@ export function registerGeneratedImage(input: {
             const remoteUrl = normalizeAssetUrl(remote.url);
             const safeRemote = {
               ...remote,
-              url: remoteUrl || input.url,
+              url: remoteUrl || payload.url,
               pendingSync: false,
             };
             useAssetStore.setState({
@@ -417,7 +434,7 @@ export function registerGeneratedImage(input: {
               console.warn('[assets] skip reload because remote url is invalid', {
                 id: remote.id,
                 remoteUrl: remote.url,
-                fallbackUrl: input.url,
+                fallbackUrl: payload.url,
               });
             }
           };
