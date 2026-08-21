@@ -11,8 +11,18 @@ type AnyPipeline = any;
 const SEG_MODEL = 'Xenova/segformer-b0-finetuned-ade-512-512';
 const DEPTH_MODEL = 'Xenova/depth-anything-small-hf';
 
-// Prefer the global HF host but fall back to the China-friendly mirror.
-const HOSTS = ['https://huggingface.co', 'https://hf-mirror.com'];
+// Prefer same-origin API proxy (works when browser cannot reach HF / mirror),
+// then China mirror, then the official Hub.
+function buildHosts(): string[] {
+  const hosts: string[] = [];
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    hosts.push(`${window.location.origin}/api/hf`);
+  } else if (typeof location !== 'undefined' && location?.origin) {
+    hosts.push(`${location.origin}/api/hf`);
+  }
+  hosts.push('https://hf-mirror.com', 'https://huggingface.co');
+  return hosts;
+}
 
 /** Longest side for in-browser inference — large uploads OOM without this. */
 const AI_MAX_SIDE = 1024;
@@ -33,16 +43,53 @@ export type ProgressFn = (stage: string, fraction: number) => void;
 
 let segPromise: Promise<AnyPipeline> | null = null;
 let depthPromise: Promise<AnyPipeline> | null = null;
+let envConfigured = false;
 
+function isSafariBrowser() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent;
+  const vendor = navigator.vendor || '';
+  return (
+    vendor.includes('Apple') &&
+    !/CriOS|FxiOS|EdgiOS|Chrome|Android/i.test(ua)
+  );
+}
+
+/**
+ * Point ONNX Runtime at same-origin /ort assets (synced from node_modules).
+ * Must override the jsDelivr defaults transformers.js sets at import time.
+ */
 function configureEnv() {
+  if (envConfigured) return;
+  envConfigured = true;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const e = env as any;
   e.allowLocalModels = false;
-  // single-threaded wasm avoids the need for cross-origin isolation
-  if (e.backends?.onnx?.wasm) {
-    e.backends.onnx.wasm.numThreads = 1;
+  e.useWasmCache = true;
+
+  const base =
+    typeof window !== 'undefined' && window.location?.origin
+      ? `${window.location.origin}/ort/`
+      : '/ort/';
+  const safari = isSafariBrowser();
+  const wasm = e.backends?.onnx?.wasm;
+  if (wasm) {
+    wasm.numThreads = 1;
+    wasm.proxy = false;
+    wasm.wasmPaths = safari
+      ? {
+          mjs: `${base}ort-wasm-simd-threaded.mjs`,
+          wasm: `${base}ort-wasm-simd-threaded.wasm`,
+        }
+      : {
+          mjs: `${base}ort-wasm-simd-threaded.asyncify.mjs`,
+          wasm: `${base}ort-wasm-simd-threaded.asyncify.wasm`,
+        };
   }
 }
+
+// Override jsDelivr WASM paths as soon as this module loads.
+configureEnv();
 
 async function createWithFallback(
   task: string,
@@ -71,9 +118,9 @@ async function createWithFallback(
   };
 
   let lastErr: unknown;
-  for (const host of HOSTS) {
+  for (const host of buildHosts()) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (env as any).remoteHost = host;
+    (env as any).remoteHost = host.endsWith('/') ? host : `${host}/`;
     try {
       // wasm is the most compatible backend across browsers
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -83,6 +130,7 @@ async function createWithFallback(
       });
     } catch (e) {
       lastErr = e;
+      console.warn(`[Aurora] 模型加载失败 @ ${host}`, e);
     }
   }
   throw lastErr;
@@ -110,6 +158,17 @@ function getDepth(onProgress?: (p: number) => void) {
     );
   }
   return depthPromise;
+}
+
+/** Fire-and-forget warmup when entering the model module. */
+export function preloadSceneAI() {
+  configureEnv();
+  void getSegmenter().catch(() => {
+    /* warmup best-effort */
+  });
+  void getDepth().catch(() => {
+    /* warmup best-effort */
+  });
 }
 
 /**
@@ -152,14 +211,26 @@ export async function runSceneAI(
   onProgress?.('正在预处理图片', 0.01);
   const input = await loadImageForAI(imageUrl);
 
-  onProgress?.('正在加载语义分割模型', 0.02);
-  const segmenter = await getSegmenter((p) =>
-    onProgress?.('正在加载语义分割模型', 0.02 + p * 0.33),
-  );
-  onProgress?.('正在加载深度估算模型', 0.36);
-  const depthEstimator = await getDepth((p) =>
-    onProgress?.('正在加载深度估算模型', 0.36 + p * 0.28),
-  );
+  // Load both models in parallel (WASM backend serializes inference later).
+  onProgress?.('正在加载 AI 模型', 0.05);
+  let segProg = 0;
+  let depthProg = 0;
+  const reportLoad = () => {
+    onProgress?.(
+      '正在加载 AI 模型',
+      0.05 + ((segProg + depthProg) / 2) * 0.55,
+    );
+  };
+  const [segmenter, depthEstimator] = await Promise.all([
+    getSegmenter((p) => {
+      segProg = p;
+      reportLoad();
+    }),
+    getDepth((p) => {
+      depthProg = p;
+      reportLoad();
+    }),
+  ]);
 
   onProgress?.('正在进行语义分割', 0.66);
   const segOut = (await segmenter(input)) as {

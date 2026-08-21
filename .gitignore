@@ -23,6 +23,7 @@ dist-ssr
 !.env.production
 .netlify
 .data
+public/ort
 
 # Editor directories and files
 .vscode/*

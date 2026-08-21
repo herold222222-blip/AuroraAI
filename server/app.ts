@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { editImage, type EditRequest } from './geminiService';
 import { createImageTo3dTask, fetchMeshyAsset, getImageTo3dTask } from './meshyService';
+import { fetchHfUpstream, HfNotFoundError, parseHfProxyPath } from './hfProxy';
 import {
   assertUsageFromAuthHeader,
   bumpUsageFromAuthHeader,
@@ -62,6 +63,7 @@ const STRIPPED_API_PREFIXES = [
   '/auth',
   '/image',
   '/meshy',
+  '/hf',
   '/pay',
   '/projects',
   '/assets',
@@ -443,6 +445,39 @@ export function createApiApp() {
       const message = err instanceof Error ? err.message : String(err);
       console.error('[meshy/asset]', message);
       res.status(500).json({ error: message });
+    }
+  });
+
+  /**
+   * Same-origin proxy for transformers.js model weights.
+   * Client: GET /api/hf/{org}/{repo}/resolve/{revision}/{file}
+   */
+  app.get('/api/hf/*path', async (req, res) => {
+    try {
+      const raw = req.params.path;
+      const segments = Array.isArray(raw)
+        ? raw.map(String)
+        : String(raw || '')
+            .split('/')
+            .filter(Boolean);
+      const relPath = parseHfProxyPath(segments);
+      if (!relPath) {
+        res.status(400).json({ error: '非法或不支持的模型路径' });
+        return;
+      }
+      const { buffer, contentType } = await fetchHfUpstream(relPath);
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.send(buffer);
+    } catch (err) {
+      if (err instanceof HfNotFoundError) {
+        res.status(404).json({ error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[hf/proxy]', message);
+      res.status(502).json({ error: `模型文件代理失败: ${message}` });
     }
   });
 

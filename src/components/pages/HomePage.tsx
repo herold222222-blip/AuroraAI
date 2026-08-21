@@ -66,6 +66,12 @@ export function HomePage() {
   const openLogin = useAuthStore((s) => s.openLogin);
   const logout = useAuthStore((s) => s.logout);
   const requireAuth = useAuthStore((s) => s.requireAuth);
+
+  /** 有模型权限（当前为管理员）时 Demo 进模型；否则走改图（现有业务） */
+  const enterDemo = () => {
+    if (isAdmin()) enterModelModule();
+    else enterImageModule();
+  };
   const [contactOpen, setContactOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -211,7 +217,7 @@ export function HomePage() {
                         pushToast('已退出登录', 'info');
                       }}
                     >
-                      退出登陆
+                      退出登录
                     </button>
                   </div>
                 )}
@@ -220,7 +226,7 @@ export function HomePage() {
                 type="button"
                 className="home-top-btn home-top-btn-solid"
                 data-auth-free
-                onClick={() => enterImageModule()}
+                onClick={() => enterDemo()}
               >
                 进入 Demo
               </button>
@@ -285,7 +291,7 @@ export function HomePage() {
                 type="button"
                 className="home-cta"
                 data-auth-free
-                onClick={() => enterImageModule()}
+                onClick={() => enterDemo()}
               >
                 立即体验 Demo
               </button>

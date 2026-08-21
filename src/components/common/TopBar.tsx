@@ -208,7 +208,7 @@ export function TopBar({ variant, workbenchSuffix }: TopBarProps) {
                       pushToast('已退出登录', 'info');
                     }}
                   >
-                    退出登陆
+                    退出登录
                   </button>
                 </div>
               )}

@@ -19,7 +19,7 @@ import type {
   SnapshotCameraPose,
 } from '../types';
 import { uid, newLayerMaterial, MATERIAL_LIBRARY, matchLibrarySwatch, materialFromSwatch, isMeshyModel, DEFAULT_AI_MODEL, resolveAiModel } from '../data/defaultLayers';
-import { runSceneAI } from '../ai/pipeline';
+import { runSceneAI, preloadSceneAI } from '../ai/pipeline';
 import { generateFallbackScene } from '../ai/fallback';
 import { buildScene } from '../ai/scene';
 import { useImageStore } from '../image/useImageStore';
@@ -617,6 +617,8 @@ export const useAppStore = create<AppState>((set, get) => {
             : target,
         transitionTo: null,
       });
+      // Warm WASM + model weights in the background while user uploads/selects.
+      void preloadSceneAI();
     },
     enterAdminModule: () => {
       const cur = get().view;
