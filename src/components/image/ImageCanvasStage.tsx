@@ -45,6 +45,21 @@ function initCrop(
   );
 }
 
+/** Fit image into the stage without upscaling (matches CSS max-width/max-height contain). */
+function containFit(
+  natW: number,
+  natH: number,
+  boxW: number,
+  boxH: number,
+): { w: number; h: number } | null {
+  if (natW <= 0 || natH <= 0 || boxW <= 0 || boxH <= 0) return null;
+  const s = Math.min(boxW / natW, boxH / natH, 1);
+  return {
+    w: Math.max(1, Math.round(natW * s)),
+    h: Math.max(1, Math.round(natH * s)),
+  };
+}
+
 /** Copy stroke pixels before async merge so later paints / canvas resets cannot wipe them. */
 function snapshotCanvas(source: HTMLCanvasElement): HTMLCanvasElement | null {
   if (!source.width || !source.height) return null;
@@ -82,6 +97,7 @@ export function ImageCanvasStage() {
   const pushToast = useAppStore((s) => s.pushToast);
 
   const wrapRef = useRef<HTMLDivElement>(null);
+  const mediaRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const maskRef = useRef<HTMLCanvasElement>(null);
   const strokeRef = useRef<HTMLCanvasElement>(null);
@@ -92,6 +108,7 @@ export function ImageCanvasStage() {
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [viewScale, setViewScale] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [mediaBox, setMediaBox] = useState({ w: 0, h: 0 });
   /** Natural size after decode — gates markers; brush uses naturalWidth directly. */
   const [imageSize, setImageSize] = useState<{ w: number; h: number } | null>(
     null,
@@ -161,8 +178,36 @@ export function ImageCanvasStage() {
     setPan({ x: 0, y: 0 });
   }, []);
 
+  useEffect(() => {
+    const el = mediaRef.current;
+    if (!el) return;
+    const sync = () => {
+      setMediaBox({ w: el.clientWidth, h: el.clientHeight });
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [currentUrl]);
+
+  const fitSize = containFit(
+    imageSize?.w ?? 0,
+    imageSize?.h ?? 0,
+    mediaBox.w,
+    mediaBox.h,
+  );
   const viewAltered =
     viewScale > 1.02 || Math.abs(pan.x) > 1 || Math.abs(pan.y) > 1;
+  // Zoom by enlarging layout size so the browser resamples from the full
+  // source bitmap. CSS transform: scale() only stretches the already-decoded
+  // fit-sized texture and looks blurry (sidebar thumbs stay sharp).
+  const zoomedLayout =
+    viewAltered && fitSize
+      ? {
+          w: Math.max(1, Math.round(fitSize.w * viewScale)),
+          h: Math.max(1, Math.round(fitSize.h * viewScale)),
+        }
+      : null;
 
   const syncCanvasSize = useCallback(
     (
@@ -642,6 +687,8 @@ export function ImageCanvasStage() {
       src={currentUrl}
       alt="edit"
       className="img-main"
+      width={imageSize?.w}
+      height={imageSize?.h}
       crossOrigin="anonymous"
       draggable={false}
       decoding="async"
@@ -679,18 +726,9 @@ export function ImageCanvasStage() {
         </button>
       )}
       <div className="img-stage-stack">
-      <div
-        className={`img-stage-frame${viewAltered ? ' is-transformed' : ''}`}
-        style={
-          viewAltered
-            ? {
-                transform: `translate(${pan.x}px, ${pan.y}px) scale(${viewScale})`,
-                transformOrigin: 'center center',
-              }
-            : undefined
-        }
-      >
+      <div className="img-stage-frame">
         <div
+          ref={mediaRef}
           className={`img-stage-media${tab === 'crop' ? ' is-cropping' : ''}${
             tab === 'retouch' &&
             (retouchTool === 'brush' || retouchTool === 'point')
@@ -698,6 +736,18 @@ export function ImageCanvasStage() {
               : ''
           }`}
         >
+          <div
+            className={`img-stage-zoom${zoomedLayout ? ' is-zoomed' : ''}`}
+            style={
+              zoomedLayout
+                ? {
+                    width: zoomedLayout.w,
+                    height: zoomedLayout.h,
+                    transform: `translate(calc(-50% + ${pan.x}px), calc(-50% + ${pan.y}px))`,
+                  }
+                : undefined
+            }
+          >
           {comparing ? (
             <div
               className="img-compare"
@@ -856,6 +906,7 @@ export function ImageCanvasStage() {
               )}
             </div>
           )}
+          </div>
         </div>
       </div>
       <div className="img-regen-slot">
